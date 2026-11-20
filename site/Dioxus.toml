@@ -1,0 +1,5 @@
+[application]
+name = "duet-site"
+
+[web.app]
+title = "Duet: two pairs of headphones, one computer"
