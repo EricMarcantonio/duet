@@ -244,9 +244,7 @@ fn keep_together_now(mut state: AppState, b: Backends) {
         crate::dlog!("keep-together: macOS keeps moving the output; giving up ({action:?})");
         state.together_wanted.set(false);
         state.show_toast(
-            "macOS keeps switching the output away from Duet. Choose “Duet” in the Sound menu, \
-             and set each pair's “Connect to This Mac” to “When Last Connected to This Mac”."
-                .into(),
+            "macOS moved the sound to one pair. To hear it on both, choose “Duet” in the Sound menu (menu bar › Control Center › Sound).".into(),
             false,
         );
         return;
@@ -390,7 +388,11 @@ pub fn set_listening_mode(mut state: AppState, b: Backends, address: String, mod
         // Read back what the headphones report once they've had a moment to switch.
         tokio::time::sleep(Duration::from_millis(1200)).await;
         refresh_bluetooth(state, b.clone()).await;
-        let reported = state.headphones.peek().get(&address).and_then(|i| i.listening_mode);
+        let reported = state
+            .headphones
+            .peek()
+            .get(&address)
+            .and_then(|i| i.listening_mode);
         crate::dlog!(
             "noise control {address}: headphones now report {:?} (asked for {})",
             reported.map(|m| m.label()),
