@@ -33,6 +33,10 @@ fi
 pb "Set :LSUIElement true" "Add :LSUIElement bool true"
 pb "Set :NSBluetoothAlwaysUsageDescription 'Duet lists and connects your paired Bluetooth headphones.'" \
    "Add :NSBluetoothAlwaysUsageDescription string 'Duet lists and connects your paired Bluetooth headphones.'"
+# Listen together (macOS 14.2+) copies the system sound to the other pairs via a Core
+# Audio tap, which macOS gates behind this one-time permission.
+pb "Set :NSAudioCaptureUsageDescription 'Duet copies your Mac’s sound to the other pair of headphones so you can listen together.'" \
+   "Add :NSAudioCaptureUsageDescription string 'Duet copies your Mac’s sound to the other pair of headphones so you can listen together.'"
 pb "Set :LSMinimumSystemVersion 11.0" "Add :LSMinimumSystemVersion string 11.0"
 
 if [ -n "${SIGN_IDENTITY:-}" ]; then

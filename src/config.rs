@@ -154,10 +154,7 @@ mod tests {
         c.save_to(&path).unwrap();
         let loaded = Config::load_from(&path);
         assert_eq!(loaded, c);
-        assert_eq!(
-            loaded.nickname("02-1B-2C-3D-4E-5F:output"),
-            Some("Sam")
-        );
+        assert_eq!(loaded.nickname("02-1B-2C-3D-4E-5F:output"), Some("Sam"));
         std::fs::remove_dir_all(dir).ok();
     }
 

@@ -597,3 +597,15 @@ svg { display: block; width: 100%; height: 100%; }
 }
 .link.quiet { color: var(--text-2); font-size: 11.5px; }
 .link.quiet:hover { color: var(--text); }
+
+/* ---- Mirror mode: "Listening together" + Stop ---------------------------- */
+.hero-actions { display: flex; gap: 8px; margin-top: 14px; }
+.hero-actions .primary { flex: 1; margin-top: 0; }
+.primary.static { display: flex; align-items: center; justify-content: center; gap: 8px; cursor: default; }
+.secondary {
+  flex: none; padding: 0 16px; border-radius: 10px;
+  border: 0; background: var(--chip); color: var(--text);
+  font: inherit; font-size: 13px; font-weight: 600;
+  cursor: default; transition: background .15s;
+}
+.secondary:hover { background: var(--press); }
