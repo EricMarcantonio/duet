@@ -5,9 +5,6 @@ use std::sync::Mutex;
 
 pub struct MockAudio {
     pub devices: Mutex<Vec<OutputDevice>>,
-    /// Pretend to support macOS-style mirroring (process taps).
-    pub taps: bool,
-    pub mirror: Mutex<Option<Vec<String>>>,
 }
 
 impl MockAudio {
@@ -23,8 +20,6 @@ impl MockAudio {
             subdevice_uids: subs.iter().map(|s| s.to_string()).collect(),
         };
         Self {
-            taps: false,
-            mirror: Mutex::new(None),
             devices: Mutex::new(vec![
                 d(
                     10,
@@ -127,26 +122,6 @@ impl AudioBackend for MockAudio {
             return Err(AudioError::NotFound(id.to_string()));
         }
         Ok(())
-    }
-    fn mirror_supported(&self) -> bool {
-        self.taps
-    }
-    fn start_mirror(&self, target_uids: &[String]) -> Result<()> {
-        let devs = self.devices.lock().unwrap();
-        if let Some(missing) = target_uids
-            .iter()
-            .find(|u| !devs.iter().any(|d| &d.uid == *u))
-        {
-            return Err(AudioError::NotFound(missing.clone()));
-        }
-        *self.mirror.lock().unwrap() = (!target_uids.is_empty()).then(|| target_uids.to_vec());
-        Ok(())
-    }
-    fn stop_mirror(&self) {
-        *self.mirror.lock().unwrap() = None;
-    }
-    fn mirror_targets(&self) -> Option<Vec<String>> {
-        self.mirror.lock().unwrap().clone()
     }
 }
 

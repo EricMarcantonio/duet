@@ -371,67 +371,6 @@ pub fn keep_together(devices: &[OutputDevice], plan: &Together, became_ready: bo
     }
 }
 
-/// One step of mirror-mode "listen together" (macOS 14.2+): the system output stays
-/// on one chosen pair (whichever macOS picked) and Duet copies the sound to the rest.
-#[derive(Debug, Clone, PartialEq)]
-pub enum MirrorStep {
-    /// Running as it should (or nothing to do yet).
-    Fine,
-    /// (Re)start copying to exactly these outputs.
-    Start(Vec<String>),
-    /// Fewer than two chosen pairs are connected: stop copying.
-    Stop,
-    /// No chosen pair is the system output yet: make this one the output.
-    Select(crate::audio::DeviceId),
-    /// The user moved the output elsewhere while their pairs are still connected: stop.
-    GiveUp,
-}
-
-/// `primary` is the pair that was the system output on the previous step (if any).
-pub fn mirror_step(
-    devices: &[OutputDevice],
-    plan: &Together,
-    running: Option<&[String]>,
-    primary: Option<&str>,
-) -> MirrorStep {
-    let live: Vec<&OutputDevice> = plan
-        .listeners()
-        .into_iter()
-        .filter_map(|l| match l {
-            Listener::Connected(d) => devices.iter().find(|x| x.uid == d.uid),
-            _ => None,
-        })
-        .collect();
-    if live.len() < 2 {
-        return if running.is_some() {
-            MirrorStep::Stop
-        } else {
-            MirrorStep::Fine
-        };
-    }
-    let default = devices.iter().find(|d| d.is_default);
-    match default {
-        Some(d) if live.iter().any(|l| l.uid == d.uid) => {
-            let targets: Vec<String> = live
-                .iter()
-                .filter(|l| l.uid != d.uid)
-                .map(|l| l.uid.clone())
-                .collect();
-            if running == Some(targets.as_slice()) {
-                MirrorStep::Fine
-            } else {
-                MirrorStep::Start(targets)
-            }
-        }
-        // The output is elsewhere. If the pair that had it is still connected, that was the
-        // user's choice; otherwise (just starting, or that pair dropped) take a chosen pair.
-        _ => match primary {
-            Some(p) if live.iter().any(|l| l.uid == p) => MirrorStep::GiveUp,
-            _ => MirrorStep::Select(live[0].id),
-        },
-    }
-}
-
 /// Stops Duet and macOS fighting over the output forever: allow a few re-asserts per
 /// window, then give up (and tell the user) rather than flip-flopping.
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -1039,55 +978,6 @@ mod tests {
         let plan = plan_together(&devices, &paired, &picks);
         assert!(plan.can_start() && !plan.is_ready());
         assert_eq!(plan.to_connect(), ["02-3C-4D-5E-6F-70"]);
-    }
-
-    #[test]
-    fn mirror_steps() {
-        let (mut devices, paired) = sample();
-        let (a, b) = ("02-2A-3B-4C-5D-6E:output", "02-1B-2C-3D-4E-5F:output");
-        let id_of = |ds: &[OutputDevice], uid: &str| ds.iter().find(|d| d.uid == uid).unwrap().id;
-        let set_default = |ds: &mut Vec<OutputDevice>, uid: &str| {
-            ds.iter_mut().for_each(|d| d.is_default = d.uid == uid)
-        };
-        let plan = |ds: &[OutputDevice]| plan_together(ds, &paired, &[]);
-
-        // Starting while the speakers are the output: pick a chosen pair first.
-        set_default(&mut devices, "BuiltInSpeakerDevice");
-        assert!(matches!(
-            mirror_step(&devices, &plan(&devices), None, None),
-            MirrorStep::Select(_)
-        ));
-        // macOS routes to pair A: copy to B.
-        set_default(&mut devices, a);
-        assert_eq!(
-            mirror_step(&devices, &plan(&devices), None, None),
-            MirrorStep::Start(vec![b.into()])
-        );
-        let running = vec![b.to_string()];
-        assert_eq!(
-            mirror_step(&devices, &plan(&devices), Some(&running), Some(a)),
-            MirrorStep::Fine
-        );
-        // macOS switches the output to B (AirPods "Automatically"): swap, don't fight.
-        set_default(&mut devices, b);
-        assert_eq!(
-            mirror_step(&devices, &plan(&devices), Some(&running), Some(a)),
-            MirrorStep::Start(vec![a.into()])
-        );
-        // User picks the speakers while both pairs are connected: stop.
-        set_default(&mut devices, "BuiltInSpeakerDevice");
-        assert_eq!(
-            mirror_step(&devices, &plan(&devices), Some(&[a.to_string()]), Some(b)),
-            MirrorStep::GiveUp
-        );
-        // The primary pair dropped and macOS fell back to the speakers... but now only one
-        // pair is left, so stop copying.
-        let id_b = id_of(&devices, b);
-        devices.retain(|d| d.id != id_b);
-        assert_eq!(
-            mirror_step(&devices, &plan(&devices), Some(&[a.to_string()]), Some(b)),
-            MirrorStep::Stop
-        );
     }
 
     #[test]

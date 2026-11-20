@@ -67,14 +67,7 @@ impl BluetoothBackend for LinkedBluetooth {
 }
 
 pub fn mock_backends(variant: &str) -> Backends {
-    // "<variant>+tap" also pretends to support macOS 14.2+ system-audio mirroring.
-    let (variant, taps) = match variant.strip_suffix("+tap") {
-        Some(v) => (v, true),
-        None => (variant, false),
-    };
-    let mut sample = MockAudio::sample();
-    sample.taps = taps;
-    let audio = Arc::new(sample);
+    let audio = Arc::new(MockAudio::sample());
     let mut parked = Vec::new();
     {
         let mut devs = audio.devices.lock().unwrap();
@@ -83,7 +76,7 @@ pub fn mock_backends(variant: &str) -> Backends {
             // Two headphones Duet has never seen: proposes a new group.
             "new" => {
                 for d in devs.iter_mut().filter(|d| d.id == 10 || d.id == 11) {
-                    d.uid = d.uid.replace("02-2A", "AA-01").replace("02-1B", "AA-02");
+                    d.uid = d.uid.replace("6C-12", "AA-01").replace("40-ED", "AA-02");
                 }
                 if let Some(d) = devs.iter_mut().find(|d| d.id == 10) {
                     d.name = "Alex’s WH-1000XM5".into();
