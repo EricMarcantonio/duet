@@ -5,6 +5,8 @@
 //! * `DUET_MOCK=full`    – both AirPods connected (raw `MockAudio::sample()`).
 //! * `DUET_MOCK=nomulti` – no Multi-Output device yet (shows the create flow).
 //! * `DUET_MOCK=flaky`   – like `1`, but every Bluetooth connect fails.
+//! * `DUET_MOCK=hint`    – both connected, battery readable, noise control not
+//!   switchable (current macOS), so the cards point at Control Center.
 
 use super::Backends;
 use crate::audio::mock::{MockAudio, MockBluetooth};
