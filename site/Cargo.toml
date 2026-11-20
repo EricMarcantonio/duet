@@ -1,0 +1,19 @@
+[package]
+name = "duet-site"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Homepage for Duet (Dioxus web, compiled to WebAssembly)."
+license = "MIT"
+
+# Standalone: keeps the site out of the app's build and lockfile.
+[workspace]
+
+[dependencies]
+dioxus = { version = "0.7", features = ["web"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"

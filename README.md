@@ -1,10 +1,29 @@
 # Duet
 
-Play your computer's audio on two pairs of AirPods (or any Bluetooth headphones)
-at once, with a separate volume for each pair. Lives in the macOS menu bar, the
-Windows system tray, or a Linux tray icon. Works fully offline.
+**Two pairs of headphones, one computer, separate volumes.**
 
-## Install (macOS)
+Duet plays your computer's audio on two pairs of AirPods (or any Bluetooth headphones)
+at once, with a separate volume for each pair, plus noise control and battery for AirPods.
+It lives in the macOS menu bar (Windows system tray / Linux tray icon on the experimental
+builds), works fully offline, and is a single small Rust app.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
+    <img src="docs/screenshot-light.png" alt="The Duet panel with two listeners, each with its own volume, battery and noise control" width="360">
+  </picture>
+</p>
+
+## Download
+
+- **macOS 11+** (Apple Silicon & Intel): [Duet-macOS.zip](https://github.com/EricMarcantonio/duet/releases/latest/download/Duet-macOS.zip)
+- Windows 10/11, experimental: [Duet-Windows.zip](https://github.com/EricMarcantonio/duet/releases/latest/download/Duet-Windows.zip)
+- Linux, experimental: [Duet-Linux.tar.gz](https://github.com/EricMarcantonio/duet/releases/latest/download/Duet-Linux.tar.gz)
+
+The macOS app isn't notarized, so the first launch needs right-click › Open (or System
+Settings › Privacy & Security › Open Anyway). All builds: [Releases](https://github.com/EricMarcantonio/duet/releases).
+
+## Build from source (macOS)
 
 ```sh
 ./scripts/bundle-macos.sh --install   # universal (Apple Silicon + Intel), copies to ~/Applications
@@ -87,3 +106,12 @@ cargo run --example probe        # print output devices + paired Bluetooth devic
 
 Code layout: `src/audio/` (shared model + per-OS backends + mocks), `src/ui/` (Dioxus
 components, tray, pure logic in `logic.rs`), `src/config.rs`, `assets/main.css`.
+The homepage is a separate Dioxus web (WebAssembly) crate in [`site/`](site/README.md).
+
+Releases: pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the macOS
+universal app, Windows and Linux, and attaches `Duet-macOS.zip`, `Duet-Windows.zip` and
+`Duet-Linux.tar.gz` to the GitHub release.
+
+## License
+
+[MIT](LICENSE)
