@@ -275,9 +275,14 @@ pub fn headphone_info_from_raw(x: &objc::RawExtras) -> Option<HeadphoneInfo> {
             ..Battery::default()
         }
     };
+    // Current macOS no longer lets other apps change noise control (the IOBluetooth
+    // property only updates an in-process copy, and the AAP channel is reserved for the
+    // system), so Duet doesn't offer buttons that would silently do nothing. Battery
+    // levels are still readable. `modes` is kept for when that changes.
+    let _ = (mode, modes);
     let info = HeadphoneInfo {
-        listening_mode: mode.filter(|m| modes.contains(m)),
-        supported_modes: modes,
+        listening_mode: None,
+        supported_modes: Vec::new(),
         battery,
     };
     (!info.is_empty()).then_some(info)
@@ -412,7 +417,7 @@ mod tests {
     #[test]
     fn extras_mapping() {
         use objc::RawExtras;
-        // AirPods Pro 2 in Transparency, buds 80/75, case 40.
+        // AirPods Pro 2: battery is reported; noise control isn't offered on macOS.
         let pro2 = RawExtras {
             mode: 3,
             anc: true,
@@ -425,8 +430,7 @@ mod tests {
             single: 0,
         };
         let i = headphone_info_from_raw(&pro2).unwrap();
-        assert_eq!(i.listening_mode, Some(ListeningMode::Transparency));
-        assert_eq!(i.supported_modes.len(), 4);
+        assert!(i.supported_modes.is_empty() && i.listening_mode.is_none());
         assert_eq!(
             i.battery,
             Battery {
@@ -436,24 +440,14 @@ mod tests {
                 single: None
             }
         );
-        // AirPods Pro (1st gen): no Adaptive, case not reported.
-        let pro1 = RawExtras {
-            product_id: 0x200E,
-            case: 0,
-            ..pro2
-        };
-        let i = headphone_info_from_raw(&pro1).unwrap();
-        assert!(!i.supported_modes.contains(&ListeningMode::Adaptive));
-        assert_eq!(i.battery.case, None);
-        // Plain Bluetooth headphones with only a single battery level.
         let other = RawExtras {
             single: 64,
             ..RawExtras::default()
         };
-        let i = headphone_info_from_raw(&other).unwrap();
-        assert!(i.supported_modes.is_empty());
-        assert_eq!(i.battery.single, Some(64));
-        // Nothing reported at all.
+        assert_eq!(
+            headphone_info_from_raw(&other).unwrap().battery.single,
+            Some(64)
+        );
         assert_eq!(headphone_info_from_raw(&RawExtras::default()), None);
     }
 

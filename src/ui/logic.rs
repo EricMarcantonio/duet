@@ -380,7 +380,8 @@ pub struct FlipGuard {
 
 impl FlipGuard {
     pub const WINDOW: Duration = Duration::from_secs(30);
-    pub const MAX: usize = 4;
+    /// One automatic retry; if macOS takes the output again, ask the user instead.
+    pub const MAX: usize = 1;
 
     /// Record a re-assert at `now`; false means "too many, stop".
     pub fn allow(&mut self, now: Instant) -> bool {
