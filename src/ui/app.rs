@@ -378,15 +378,24 @@ pub fn set_listening_mode(mut state: AppState, b: Backends, address: String, mod
         .pending_modes
         .write()
         .pick(&address, mode, Instant::now());
+    // Called on the UI (main) thread on purpose: IOBluetooth hands the change to the
+    // Bluetooth daemon via the main run loop, and a call from a worker thread with no
+    // run loop is silently dropped. The call itself returns immediately.
+    let result = b.bluetooth.set_listening_mode(&address, mode);
+    crate::dlog!("noise control {address}: {} -> {result:?}", mode.label());
+    if let Err(e) = result {
+        state.error(format!("Couldn't switch to {}: {e}", mode.label()));
+    }
     spawn_forever(async move {
-        let bt = b.bluetooth.clone();
-        let addr = address.clone();
-        match blocking(move || bt.set_listening_mode(&addr, mode)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => state.error(format!("Couldn't switch to {}: {e}", mode.label())),
-            Err(e) => state.error(e),
-        }
-        refresh_bluetooth(state, b).await;
+        // Read back what the headphones report once they've had a moment to switch.
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        refresh_bluetooth(state, b.clone()).await;
+        let reported = state.headphones.peek().get(&address).and_then(|i| i.listening_mode);
+        crate::dlog!(
+            "noise control {address}: headphones now report {:?} (asked for {})",
+            reported.map(|m| m.label()),
+            mode.label()
+        );
     });
 }
 
