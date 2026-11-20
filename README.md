@@ -103,7 +103,7 @@ and the WebKitGTK/GTK + libayatana-appindicator dev packages to build. Build tho
 ```sh
 cargo test                       # unit + live CoreAudio tests (read-only except a speaker volume round-trip it restores)
 cargo test -- --ignored          # also create/destroy a temp multi-output and switch outputs (restored)
-DUET_MOCK=1 cargo run            # fake devices; variants: full, new, nomulti, flaky
+DUET_MOCK=1 cargo run            # fake devices; variants: full, new, hint, nomulti, flaky
 swift scripts/make-icon.swift    # regenerate assets/icon/* (app icon, .icns, .ico)
 DUET_WINDOWED=1 cargo run        # normal window instead of the menu bar popover
 cargo run --example probe        # print output devices + paired Bluetooth devices
