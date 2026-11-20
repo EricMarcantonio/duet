@@ -3,14 +3,14 @@
 **Two pairs of headphones, one computer, separate volumes.**
 
 Duet plays your computer's audio on two pairs of AirPods (or any Bluetooth headphones)
-at once, with a separate volume for each pair, plus noise control and battery for AirPods.
+at once, with a separate volume for each pair, plus AirPods battery levels.
 It lives in the macOS menu bar (Windows system tray / Linux tray icon on the experimental
 builds), works fully offline, and is a single small Rust app.
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
-    <img src="docs/screenshot-light.png" alt="The Duet panel with two listeners, each with its own volume, battery and noise control" width="360">
+    <img src="docs/screenshot-light.png" alt="The Duet panel with two listeners, each with its own volume slider and battery levels" width="360">
   </picture>
 </p>
 
@@ -54,8 +54,11 @@ in System Settings › General › Login Items.
   AirPods), Duet switches it back so nobody drops out. Pick another output in Duet (or the
   Sound menu) and it stops.
 - **Each listener card**: its own volume slider (the Mac's volume keys don't work on
-  Multi-Output devices), Mute and presets, battery (left/right/case), and for AirPods/Beats
-  with noise control: **Off / Transparency / Adaptive / Noise Cancellation**. Click a name to rename it.
+  Multi-Output devices), Mute and presets, and battery (left/right/case). Click a name to rename it.
+- **Noise control** is switchable inside Duet only where the OS allows it (Linux, over Apple's
+  AAP protocol). On macOS, Apple keeps that Bluetooth channel to itself — the card says
+  "Noise control: Control Center › Sound" and you switch Off / Transparency / Adaptive /
+  Noise Cancellation there. Windows exposes no API for it at all.
 - **Other outputs** lets you go back to just the speakers or one pair.
 
 While listening together Duet also moves the default **microphone** off the AirPods to the
@@ -76,8 +79,8 @@ WebView2 on Windows, WebKitGTK on Linux), and everything else goes through syste
 
 | | Audio | Bluetooth | Noise control & battery |
 |---|---|---|---|
-| macOS | CoreAudio (Multi-Output device) | IOBluetooth | IOBluetooth private properties (what Control Center uses) |
-| Windows | WASAPI + Duet's own audio mirror | WinRT Bluetooth (list only) | not available (Windows exposes no API for it) |
+| macOS | CoreAudio (Multi-Output device) | IOBluetooth | battery readable; noise control only in Control Center (macOS keeps that channel) |
+| Windows | WASAPI + Duet's own audio mirror | WinRT Bluetooth (list only) | none (Windows exposes no API for it) |
 | Linux | PulseAudio/PipeWire `module-combine-sink` | `bluetoothctl` | Apple's AAP protocol over L2CAP (as in LibrePods) — experimental |
 
 ## Platforms
