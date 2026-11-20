@@ -29,53 +29,36 @@ The download buttons point at
 `https://github.com/EricMarcantonio/duet/releases/latest/download/Duet-{macOS.zip,Windows.zip,Linux.tar.gz}`,
 the files `.github/workflows/release.yml` attaches to each release. Keep the names in sync.
 
-## Deploying (not set up yet)
+## Deploying (GitHub Pages, live)
 
-Any static host works. Some options:
+<https://ericmarcantonio.github.io/duet/> is built and published by
+[`.github/workflows/pages.yml`](../.github/workflows/pages.yml) on every push that touches
+`site/` (or on demand from the Actions tab → Website → Run workflow). It builds with
+`--base-path /duet`, which the asset resolver bakes into every URL, and uploads
+`site/dist/public` as the Pages artifact. Pages is set to "GitHub Actions" as its source
+(Settings › Pages), so nothing is committed to a `gh-pages` branch.
 
-### Vercel, prebuilt (simplest)
+The Dioxus CLI is installed from crates.io on the first run and cached afterwards
+(keyed on the CLI version), so the first deploy takes a few minutes and later ones about a
+minute.
 
-`vercel.json` tells Vercel to skip building and serve `dist/public` as-is (with long-lived
-caching for the hashed `assets/`).
+### Moving to a custom domain (marcantonio.dev, on Cloudflare DNS)
 
-```sh
-cd site
-dx bundle --platform web --release --out-dir dist
-npx vercel link                 # once: create/link the Vercel project, root directory = site
-npx vercel deploy --prod        # uploads dist/public
-```
+1. Add a `CNAME` file to this folder containing just the hostname, e.g.
+   `echo marcantonio.dev > site/CNAME`, and push. The workflow then builds for the domain
+   root instead of `/duet/`.
+2. In Cloudflare DNS for `marcantonio.dev`, add records for GitHub Pages, **Proxy status:
+   DNS only** (grey cloud — Pages issues its own certificate):
+   - apex: `A @ 185.199.108.153`, `185.199.109.153`, `185.199.110.153`, `185.199.111.153`
+   - `www`: `CNAME www ericmarcantonio.github.io`
+3. In the repo: Settings › Pages › Custom domain → `marcantonio.dev`, then tick
+   **Enforce HTTPS** once the certificate is issued.
 
-(`vercel build` + `vercel deploy --prebuilt` works too if you prefer Vercel's build-output flow.)
+Once the domain is set, `<owner>.github.io/<repo>/` redirects to it, so the `/duet/` build
+base path must not be used with a custom domain — hence the `CNAME` switch in the workflow.
 
-### Vercel, from Git
+### Alternatives
 
-Vercel's build image doesn't ship the Rust toolchain, so either:
-
-- commit the build output (e.g. build into a `public/` folder that isn't ignored) and point the
-  project's output directory at it; or
-- build in a GitHub Action and deploy with the Vercel CLI, using `VERCEL_TOKEN`,
-  `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` secrets:
-
-  ```yaml
-  - uses: dtolnay/rust-toolchain@stable
-    with: { targets: wasm32-unknown-unknown }
-  - run: cargo install dioxus-cli --version 0.7.10 --locked
-  - run: dx bundle --platform web --release --out-dir dist
-    working-directory: site
-  - run: npx vercel deploy --prod --token "$VERCEL_TOKEN"
-    working-directory: site
-  ```
-
-GitHub Pages or Cloudflare Pages work the same way: upload `dist/public`.
-
-### Custom domain (marcantonio.dev on Cloudflare DNS)
-
-1. In the Vercel project: Settings › Domains › add the domain (for example `duet.marcantonio.dev`).
-2. In Cloudflare DNS for `marcantonio.dev`, add a record:
-   - subdomain: `CNAME duet → cname.vercel-dns.com`, **Proxy status: DNS only** (grey cloud);
-   - apex (`marcantonio.dev` itself): Cloudflare flattens a CNAME at the root, or use the
-     `A` record Vercel shows (`76.76.21.21`), also DNS only.
-3. Wait for Vercel to verify the domain and issue the certificate.
-
-Keep the Cloudflare proxy off: Vercel issues and renews the TLS certificate itself, and
-proxying through Cloudflare gets in the way of that (and of Vercel's caching).
+Vercel works too (`vercel.json` here skips Vercel's build and serves a prebuilt `dist/public`:
+`dx bundle --platform web --release --out-dir dist` then `npx vercel deploy --prod`), as does
+Cloudflare Pages or any static host — the output is plain files.

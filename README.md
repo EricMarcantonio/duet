@@ -7,6 +7,8 @@ at once, with a separate volume for each pair, plus AirPods battery levels.
 It lives in the macOS menu bar (Windows system tray / Linux tray icon on the experimental
 builds), works fully offline, and is a single small Rust app.
 
+**Homepage:** <https://ericmarcantonio.github.io/duet/> (Rust + WebAssembly, in [`site/`](site/)).
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
