@@ -1,0 +1,71 @@
+name: Website
+
+# Publishes site/ to GitHub Pages.
+#   - Project site:   https://<owner>.github.io/<repo>/
+#   - Custom domain:  drop a CNAME file in site/ (see site/README.md) and the
+#                     build switches to the domain root.
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; a newer push supersedes a queued run.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  DIOXUS_CLI: 0.7.10
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: site
+      # Installing the CLI from source takes several minutes, so keep the
+      # binary between runs (keyed on the version).
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/dx
+          key: dx-${{ env.DIOXUS_CLI }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install the Dioxus CLI
+        run: command -v dx || cargo install dioxus-cli --version "$DIOXUS_CLI" --locked
+      - name: Build
+        working-directory: site
+        run: |
+          if [ -f CNAME ]; then
+            echo "site/CNAME found: building for the custom domain root."
+            dx bundle --platform web --release --out-dir dist
+          else
+            echo "Project site: base path /${GITHUB_REPOSITORY#*/}"
+            dx bundle --platform web --release --base-path "/${GITHUB_REPOSITORY#*/}" --out-dir dist
+          fi
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist/public
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
