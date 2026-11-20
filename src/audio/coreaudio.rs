@@ -13,6 +13,9 @@ use core_foundation::dictionary::CFDictionary;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
 
+/// The running system-audio mirror (one per process; CoreAudio is a unit struct).
+static MIRROR: std::sync::Mutex<Option<super::tap_mirror::Mirror>> = std::sync::Mutex::new(None);
+
 /// CoreAudio-backed audio backend. Stateless; every call queries the HAL.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CoreAudio;
@@ -629,6 +632,35 @@ impl AudioBackend for CoreAudio {
             mic,
         )?;
         Ok(Some(old))
+    }
+
+    fn mirror_supported(&self) -> bool {
+        super::tap_mirror::supported()
+    }
+
+    fn start_mirror(&self, target_uids: &[String]) -> Result<()> {
+        let mut slot = MIRROR.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.as_ref().is_some_and(|m| m.targets() == target_uids) {
+            return Ok(());
+        }
+        *slot = None; // stop the old one first (releases its devices)
+        if target_uids.is_empty() {
+            return Ok(());
+        }
+        *slot = Some(super::tap_mirror::Mirror::start(target_uids)?);
+        Ok(())
+    }
+
+    fn stop_mirror(&self) {
+        *MIRROR.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    fn mirror_targets(&self) -> Option<Vec<String>> {
+        MIRROR
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|m| m.targets())
     }
 }
 

@@ -76,7 +76,7 @@ WebView2 on Windows, WebKitGTK on Linux), and everything else goes through syste
 
 | | Audio | Bluetooth | Noise control & battery |
 |---|---|---|---|
-| macOS | CoreAudio (Multi-Output device) | IOBluetooth | IOBluetooth private properties (what Control Center uses) |
+| macOS | CoreAudio: on 14.2+ the system output stays on one pair and Duet copies the sound to the others with a Core Audio tap (asks once for “System Audio Recording”); older versions use a Multi-Output device | IOBluetooth | IOBluetooth private properties (what Control Center uses) |
 | Windows | WASAPI + Duet's own audio mirror | WinRT Bluetooth (list only) | not available (Windows exposes no API for it) |
 | Linux | PulseAudio/PipeWire `module-combine-sink` | `bluetoothctl` | Apple's AAP protocol over L2CAP (as in LibrePods) — experimental |
 
