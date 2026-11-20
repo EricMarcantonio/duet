@@ -1,0 +1,9 @@
+[application]
+name = "Duet"
+
+[bundle]
+icon = ["assets/icon/32x32.png", "assets/icon/128x128.png", "assets/icon/256x256.png", "assets/icon/Duet.icns", "assets/icon/icon.ico"]
+identifier = "app.duet.Duet"
+publisher = "Duet"
+short_description = "Play your computer's audio on two pairs of Bluetooth headphones, each with its own volume."
+
