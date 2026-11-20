@@ -10,8 +10,6 @@ pub mod mock;
 pub mod bluetooth;
 #[cfg(target_os = "macos")]
 pub mod coreaudio;
-#[cfg(target_os = "macos")]
-pub mod tap_mirror;
 
 /// Linux backends (PulseAudio / PipeWire via `pactl`, BlueZ via `bluetoothctl`).
 #[cfg(target_os = "linux")]
@@ -94,24 +92,6 @@ pub trait AudioBackend: Send + Sync + 'static {
     /// device (and makes the system flip the output between them). Default: no-op.
     fn avoid_bluetooth_input(&self) -> Result<Option<String>> {
         Ok(None)
-    }
-    /// The OS can copy system audio to extra outputs while the system output stays on
-    /// one pair (macOS 14.2+ process taps). When true, "listen together" uses
-    /// [`AudioBackend::start_mirror`] instead of switching to a Multi-Output device.
-    fn mirror_supported(&self) -> bool {
-        false
-    }
-    /// Copy the system mix to exactly `target_uids` (replacing any running mirror).
-    fn start_mirror(&self, _target_uids: &[String]) -> Result<()> {
-        Err(AudioError::Other(
-            "mirroring isn't available on this system".into(),
-        ))
-    }
-    /// Stop mirroring (no-op if not running).
-    fn stop_mirror(&self) {}
-    /// Outputs currently being fed by the mirror (None = not running).
-    fn mirror_targets(&self) -> Option<Vec<String>> {
-        None
     }
     /// Remove a multi-output that Duet itself created (see [`is_duet_group_uid`]).
     /// Backends that can't remove groups keep the default no-op.

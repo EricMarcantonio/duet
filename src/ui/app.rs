@@ -54,10 +54,6 @@ pub struct AppState {
     /// another output (macOS otherwise jumps to whichever AirPods connected last).
     pub together_wanted: Signal<bool>,
     pub flips: Signal<FlipGuard>,
-    /// Mirror mode (macOS 14.2+): the pair that's the system output, and the pairs
-    /// Duet is copying the sound to.
-    pub mirror_primary: Signal<Option<String>>,
-    pub mirroring: Signal<Option<Vec<String>>>,
     /// The chosen headphones were all connected at the last poll.
     pub was_ready: Signal<bool>,
     /// "Choose headphones" list is open.
@@ -89,8 +85,6 @@ impl AppState {
             loaded: Signal::new(false),
             together_wanted: Signal::new(false),
             flips: Signal::new(FlipGuard::default()),
-            mirror_primary: Signal::new(None),
-            mirroring: Signal::new(None),
             was_ready: Signal::new(false),
             choosing: Signal::new(false),
             busy: Signal::new(false),
@@ -189,113 +183,9 @@ pub async fn refresh_audio(mut state: AppState, b: Backends) {
         });
         state.together_wanted.set(duet_playing);
         state.loaded.set(true);
-        if b_keep.audio.mirror_supported() {
-            retire_duet_groups(state, b_keep);
-        }
     } else {
         keep_together_now(state, b_keep);
     }
-}
-
-/// Mirror mode doesn't need the "Duet" Multi-Output device: remove Duet-made ones so the
-/// Sound menu only lists real outputs. If one is the system output, move the output to a
-/// connected chosen pair (or the built-in speakers) first, so audio doesn't go silent.
-fn retire_duet_groups(state: AppState, b: Backends) {
-    let devices = state.devices.peek().clone();
-    let groups: Vec<&OutputDevice> = devices
-        .iter()
-        .filter(|d| d.is_multi_output() && crate::audio::is_duet_group_uid(&d.uid))
-        .collect();
-    if groups.is_empty() {
-        return;
-    }
-    if groups.iter().any(|g| g.is_default) {
-        let plan = plan_together(
-            &devices,
-            &state.paired.peek(),
-            &state.config.peek().listeners,
-        );
-        let live = plan.live_uids();
-        let next = devices.iter().find(|d| live.contains(&d.uid)).or_else(|| {
-            devices
-                .iter()
-                .find(|d| d.transport == crate::audio::Transport::BuiltIn)
-        });
-        if let Some(d) = next {
-            crate::dlog!(
-                "startup: output was the old Duet device; switching to {}",
-                d.name
-            );
-            let _ = b.audio.set_default_output(d.id);
-        }
-    }
-    for g in groups {
-        crate::dlog!("startup: removing old Duet device {} ({})", g.name, g.uid);
-        let _ = b.audio.remove_multi_output(g.id);
-    }
-}
-
-/// One mirror-mode step (see [`mirror_step`]).
-fn mirror_tick(mut state: AppState, b: Backends) {
-    let devices = state.devices.peek().clone();
-    let plan = plan_together(
-        &devices,
-        &state.paired.peek(),
-        &state.config.peek().listeners,
-    );
-    let running = b.audio.mirror_targets();
-    let primary = state.mirror_primary.peek().clone();
-    let default_uid = devices.iter().find(|d| d.is_default).map(|d| d.uid.clone());
-    let step = mirror_step(&devices, &plan, running.as_deref(), primary.as_deref());
-    if step != MirrorStep::Fine {
-        crate::dlog!("mirror: {step:?} (output {:?})", default_uid);
-    }
-    match step {
-        MirrorStep::Fine => {
-            if running.is_some() && primary != default_uid {
-                state.mirror_primary.set(default_uid);
-            }
-        }
-        MirrorStep::Start(targets) => match b.audio.start_mirror(&targets) {
-            Ok(()) => state.mirror_primary.set(default_uid),
-            Err(e) => {
-                state.error(format!(
-                    "Couldn't copy the sound to the other headphones: {e}"
-                ));
-                state.together_wanted.set(false);
-            }
-        },
-        MirrorStep::Stop => {
-            b.audio.stop_mirror();
-            state.mirror_primary.set(None);
-        }
-        MirrorStep::Select(id) => {
-            if state.flips.write().allow(Instant::now()) {
-                set_default(state, b.clone(), id);
-            } else {
-                state.together_wanted.set(false);
-                b.audio.stop_mirror();
-            }
-        }
-        MirrorStep::GiveUp => {
-            b.audio.stop_mirror();
-            state.mirror_primary.set(None);
-            state.together_wanted.set(false);
-        }
-    }
-    let now = b.audio.mirror_targets();
-    if *state.mirroring.peek() != now {
-        state.mirroring.set(now);
-    }
-}
-
-/// "Stop listening together": stop copying; the system output stays where it is.
-pub fn stop_together(mut state: AppState, b: Backends) {
-    crate::dlog!("stop listening together");
-    state.together_wanted.set(false);
-    b.audio.stop_mirror();
-    state.mirror_primary.set(None);
-    state.mirroring.set(None);
 }
 
 fn log_device_changes(old: &[OutputDevice], new: &[OutputDevice]) {
@@ -333,11 +223,6 @@ fn keep_mic_off_headphones(b: &Backends) {
 /// pair that just connected, and fold newly connected chosen headphones in.
 fn keep_together_now(mut state: AppState, b: Backends) {
     if !*state.together_wanted.peek() || *state.busy.peek() || !state.connecting.peek().is_empty() {
-        return;
-    }
-    if b.audio.mirror_supported() {
-        keep_mic_off_headphones(&b);
-        mirror_tick(state, b);
         return;
     }
     keep_mic_off_headphones(&b);
@@ -505,11 +390,7 @@ pub fn set_listening_mode(mut state: AppState, b: Backends, address: String, mod
         // Read back what the headphones report once they've had a moment to switch.
         tokio::time::sleep(Duration::from_millis(1200)).await;
         refresh_bluetooth(state, b.clone()).await;
-        let reported = state
-            .headphones
-            .peek()
-            .get(&address)
-            .and_then(|i| i.listening_mode);
+        let reported = state.headphones.peek().get(&address).and_then(|i| i.listening_mode);
         crate::dlog!(
             "noise control {address}: headphones now report {:?} (asked for {})",
             reported.map(|m| m.label()),
@@ -579,10 +460,6 @@ pub fn listen_together(mut state: AppState, b: Backends, plan: &Together) {
         missing
     );
     if missing.is_empty() {
-        if b.audio.mirror_supported() {
-            mirror_tick(state, b);
-            return;
-        }
         match plan {
             Together::Group { group, .. } if !group.is_default => set_default(state, b, group.id),
             Together::Proposed { .. } => apply_duet_group(state, b, plan.live_uids()),
@@ -626,12 +503,6 @@ pub fn listen_together(mut state: AppState, b: Backends, plan: &Together) {
 /// While Duet is the output, keep it in step with the chosen headphones (after the
 /// user changes the choice or a chosen pair finishes connecting).
 pub fn sync_if_playing(state: AppState, b: Backends) {
-    if b.audio.mirror_supported() {
-        if *state.together_wanted.peek() {
-            mirror_tick(state, b);
-        }
-        return;
-    }
     let devices = state.devices.peek().clone();
     let playing = devices
         .iter()
@@ -798,13 +669,7 @@ fn Header(mode: WindowMode) -> Element {
         Some(d) => (d.name.clone(), icons::for_device(d.transport, &d.name)),
         None => ("No output".to_string(), icons::SPEAKER_MUTE),
     };
-    let copies = state.mirroring.read().as_ref().map_or(0, |t| t.len());
-    let together = current.is_some_and(|d| d.is_multi_output()) || copies > 0;
-    let label = if copies > 0 {
-        format!("{label} + {copies}")
-    } else {
-        label
-    };
+    let together = current.is_some_and(|d| d.is_multi_output());
     let mut moved = state.panel_moved;
     rsx! {
         header {
@@ -852,22 +717,8 @@ fn TogetherSection() -> Element {
     let picking = *choosing.read();
     let busy = *state.busy.read();
     let members = plan.listeners();
-    let mirroring = state.mirroring.read().clone();
-    let mirror_mode = backends.audio.mirror_supported();
-    let active = if mirror_mode {
-        mirroring.as_ref().is_some_and(|t| !t.is_empty())
-    } else {
-        plan.is_active()
-    };
+    let active = plan.is_active();
     let ready = plan.is_ready();
-    let primary_name = state.mirror_primary.read().as_ref().and_then(|u| {
-        state
-            .devices
-            .read()
-            .iter()
-            .find(|d| &d.uid == u)
-            .map(|d| d.name.clone())
-    });
     let names: Vec<String> = {
         let cfg = state.config.read();
         members
@@ -881,20 +732,7 @@ fn TogetherSection() -> Element {
             "Choose two headphones".to_string(),
             "Pick any two Bluetooth headphones. Duet plays your audio on both, each with its own volume.".to_string(),
         ),
-        (_, true, _) if mirror_mode => (
-            "Now playing on",
-            names.join(" & "),
-            match &primary_name {
-                Some(p) => format!("Sound output: {p} · Duet copies it to the others"),
-                None => "Duet copies the sound to every pair".to_string(),
-            },
-        ),
         (_, true, _) => ("Now playing on", names.join(" & "), DUET_GROUP_NAME.to_string()),
-        (_, false, true) if mirror_mode => (
-            "Ready to share",
-            names.join(" & "),
-            "Plays on every pair, each with its own volume".to_string(),
-        ),
         (_, false, true) => ("Ready to share", names.join(" & "), "Plays through the “Duet” output".to_string()),
         (_, false, false) if plan.can_start() => (
             "Ready to connect",
@@ -924,21 +762,6 @@ fn TogetherSection() -> Element {
                     onclick: move |_| choosing.set(true),
                     span { class: "btn-icon", dangerous_inner_html: icons::BLUETOOTH }
                     "Choose headphones"
-                }
-            } else if active && mirror_mode {
-                div { class: "hero-actions",
-                    div { class: "primary active static",
-                        span { class: "btn-icon", dangerous_inner_html: icons::CHECK }
-                        "Listening together"
-                    }
-                    button {
-                        class: "secondary",
-                        onclick: {
-                            let b = backends.clone();
-                            move |_| stop_together(state, b.clone())
-                        },
-                        "Stop"
-                    }
                 }
             } else {
                 button {
@@ -1405,7 +1228,8 @@ fn OutputRow(device: OutputDevice) -> Element {
                         class: "use",
                         disabled: busy,
                         onclick: move |_| {
-                            stop_together(state, backends.clone());
+                            let mut wanted = state.together_wanted;
+                            wanted.set(false);
                             set_default(state, backends.clone(), id);
                         },
                         "Use"
