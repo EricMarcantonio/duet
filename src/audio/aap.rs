@@ -202,7 +202,9 @@ pub fn looks_apple(name: &str, modalias: Option<&str>) -> bool {
         return true;
     }
     let n = name.to_ascii_lowercase();
-    n.contains("airpods") || n.contains("beats")
+    // macOS names the 2nd-gen pair "Eric's AirPod Pro 2's" (singular), so match
+    // the stem rather than "airpods".
+    n.contains("airpod") || n.contains("beats")
 }
 
 /// `l2_bdaddr` bytes for "AA-BB-CC-DD-EE-FF" / "aa:bb:...": BlueZ stores addresses
@@ -444,6 +446,7 @@ mod tests {
         assert_eq!(parse_modalias("bluetooth:v004Cx2014"), None);
         assert!(looks_apple("Headphones", Some("bluetooth:v004Cp2014d6105")));
         assert!(looks_apple("Alex's AirPods Pro", None));
+        assert!(looks_apple("Alex's AirPod Pro 2's", None));
         assert!(looks_apple(
             "Beats Studio Pro",
             Some("bluetooth:v004Cp2024")

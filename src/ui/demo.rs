@@ -72,7 +72,7 @@ pub fn mock_backends(variant: &str) -> Backends {
     {
         let mut devs = audio.devices.lock().unwrap();
         match variant {
-            "full" => {}
+            "full" | "hint" => {}
             // Two headphones Duet has never seen: proposes a new group.
             "new" => {
                 for d in devs.iter_mut().filter(|d| d.id == 10 || d.id == 11) {
@@ -98,8 +98,11 @@ pub fn mock_backends(variant: &str) -> Backends {
             }
         }
     }
-    let bt = MockBluetooth::sample();
-    if variant == "full" || variant == "new" {
+    // `hint` mirrors current macOS: both pairs connected, battery readable,
+    // noise control only switchable in Control Center.
+    let mut bt = MockBluetooth::sample();
+    bt.read_only = variant == "hint";
+    if matches!(variant, "full" | "new" | "hint") {
         bt.connect("02-1B-2C-3D-4E-5F").ok();
     }
     Backends {

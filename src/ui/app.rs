@@ -991,6 +991,13 @@ fn ListenerCard(listener: Listener, index: usize) -> Element {
         }
         _ => rsx! {},
     };
+    let hint = extras.as_ref().and_then(|(_, info)| {
+        noise_hint(
+            &device_name,
+            info,
+            crate::ui::platform::noise_control_hint(),
+        )
+    });
 
     let controls = match &listener {
         Listener::Connected(d) if d.volume.is_some() => {
@@ -1034,6 +1041,9 @@ fn ListenerCard(listener: Listener, index: usize) -> Element {
             }
             {controls}
             {noise}
+            if let Some(h) = hint {
+                div { class: "hint", "Noise control: {h}" }
+            }
         }
     }
 }

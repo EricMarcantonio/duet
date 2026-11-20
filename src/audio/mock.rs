@@ -129,6 +129,8 @@ pub struct MockBluetooth {
     pub devices: Mutex<Vec<BluetoothDevice>>,
     /// Noise-control mode per address (every mock headphone supports all four).
     pub modes: Mutex<std::collections::HashMap<String, ListeningMode>>,
+    /// Behave like current macOS: battery readable, noise control not switchable.
+    pub read_only: bool,
 }
 
 impl MockBluetooth {
@@ -152,6 +154,7 @@ impl MockBluetooth {
                 b("11-22-33-44-55-66", "MX Master 3", false, false),
             ]),
             modes: Mutex::new(Default::default()),
+            read_only: false,
         }
     }
     fn set(&self, address: &str, connected: bool) -> Result<()> {
@@ -190,6 +193,19 @@ impl BluetoothBackend for MockBluetooth {
             .bytes()
             .fold(7u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
         let level = |k: u32| Some((35 + (seed / k) % 65) as u8);
+        if self.read_only {
+            // Battery is still reported; the mode is not something Duet may change.
+            return Ok(Some(HeadphoneInfo {
+                listening_mode: None,
+                supported_modes: Vec::new(),
+                battery: Battery {
+                    left: level(3),
+                    right: level(5),
+                    case: level(11),
+                    single: None,
+                },
+            }));
+        }
         Ok(Some(HeadphoneInfo {
             listening_mode: Some(mode),
             supported_modes: ListeningMode::ALL.to_vec(),

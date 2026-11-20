@@ -671,6 +671,21 @@ pub fn battery_parts(b: &crate::audio::Battery) -> Vec<(&'static str, u8)> {
         .collect()
 }
 
+/// Where to send the user for noise control when Duet can't offer the buttons.
+///
+/// Only AirPods/Beats are mentioned (they're the ones that answer to the OS),
+/// and only when the device reports battery but no switchable modes — i.e. the
+/// platform reads the pair but can't change it.
+pub fn noise_hint(
+    device_name: &str,
+    info: &crate::audio::HeadphoneInfo,
+    hint: Option<&'static str>,
+) -> Option<&'static str> {
+    let hint = hint?;
+    let apple = crate::audio::aap::looks_apple(device_name, None);
+    (apple && info.supported_modes.is_empty()).then_some(hint)
+}
+
 /// A mode the user just picked wins over polled state until the device reports
 /// it (or a few seconds pass), so the switcher doesn't flicker back.
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -1227,6 +1242,39 @@ mod tests {
             "Jordan"
         );
         assert_eq!(display_name(&cfg, "v", "   "), "   ");
+    }
+
+    #[test]
+    fn noise_hint_only_for_apple_pairs_duet_cant_switch() {
+        use crate::audio::{Battery, HeadphoneInfo, ListeningMode};
+        let battery = Battery {
+            left: Some(80),
+            right: Some(75),
+            case: Some(40),
+            single: None,
+        };
+        let read_only = HeadphoneInfo {
+            listening_mode: None,
+            supported_modes: vec![],
+            battery,
+        };
+        let switchable = HeadphoneInfo {
+            listening_mode: Some(ListeningMode::Transparency),
+            supported_modes: ListeningMode::ALL.to_vec(),
+            battery,
+        };
+        let hint = Some("Control Center \u{203a} Sound");
+        // AirPods that Duet can only read: point at the OS.
+        assert_eq!(noise_hint("Alex's AirPod Pro 2's", &read_only, hint), hint);
+        assert_eq!(
+            noise_hint("Sam\u{2019}s Beats Studio", &read_only, hint),
+            hint
+        );
+        // Nothing to point at when Duet can switch them itself, when the pair
+        // isn't an Apple one, or when this platform has no such setting.
+        assert_eq!(noise_hint("Alex's AirPod Pro 2's", &switchable, hint), None);
+        assert_eq!(noise_hint("Sony WH-1000XM5", &read_only, hint), None);
+        assert_eq!(noise_hint("Alex's AirPod Pro 2's", &read_only, None), None);
     }
 
     #[test]

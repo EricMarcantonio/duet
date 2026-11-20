@@ -170,7 +170,7 @@ fn Hero(os: Os) -> Element {
                         }
                         img {
                             src: SHOT_LIGHT,
-                            alt: "The Duet panel: two listeners, Alex and Sam, each with a volume slider, battery levels and noise control, listening together.",
+                            alt: "The Duet panel: two listeners, Alex and Sam, each with a volume slider and battery levels, listening together.",
                             width: "400",
                             height: "760",
                         }
@@ -208,8 +208,8 @@ fn Features() -> Element {
             icon: || rsx! {
                 WaveIcon {}
             },
-            title: "Noise control & battery",
-            body: "Switch AirPods between Off, Transparency, Adaptive and Noise Cancellation, and see left, right and case battery.",
+            title: "Battery, at a glance",
+            body: "Left, right and case battery for every pair, refreshed as you listen. Noise control is one click away in Control Center.",
         },
         Feature {
             icon: || rsx! {
@@ -352,7 +352,7 @@ fn Install() -> Element {
                         }
                         li {
                             CheckIcon {}
-                            span { "Noise control and battery: AirPods and Beats" }
+                            span { "Battery levels for AirPods and Beats" }
                         }
                     }
                     div { class: "cta",
