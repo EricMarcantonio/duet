@@ -4,10 +4,14 @@
 (`Duet-macOS.zip` on the GitHub release for `v#{version}`). It lives here so the
 cask can be reviewed and linted with the source it packages.
 
-The tap is **not published yet**. `brew install --cask duet` does not work today,
-and the README says so. Until the tap exists, install the release zip directly
-from `https://github.com/EricMarcantonio/duet/releases/latest` and right-click ›
-Open on first launch.
+The tap is published: <https://github.com/EricMarcantonio/homebrew-duet>, with
+this file mirrored at `Casks/d/duet.rb`. Homebrew 7 refuses casks from a
+third-party tap until it is trusted, so the install is two commands:
+
+```sh
+brew trust ericmarcantonio/duet
+brew install --cask EricMarcantonio/duet/duet
+```
 
 ## Regenerating version and sha256
 
@@ -24,9 +28,10 @@ Homebrew is installed. The file currently carries `version "0.3.0"` with an
 all-zero placeholder digest because that artifact has not been released yet; a
 real digest is committed only once the artifact exists.
 
-## Publishing the tap
+## Publishing the tap (already done)
 
-Publishing is a manual, owner-run step. From the repository root:
+Kept for reference — the tap exists, this is how it was created and how it is
+refreshed. From the repository root:
 
 ```sh
 # 1. Create the tap repository
