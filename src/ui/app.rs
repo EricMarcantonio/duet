@@ -7,7 +7,7 @@ use crate::audio::{BluetoothDevice, DeviceId, HeadphoneInfo, ListeningMode, Outp
 use crate::config::Config;
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -45,8 +45,9 @@ pub struct AppState {
     pub last_bt_error: Signal<Option<String>>,
     /// Bluetooth access is blocked by privacy settings (shown as a banner, not toasts).
     pub bt_permission: Signal<bool>,
-    /// Bluetooth addresses with a connect in flight.
-    pub connecting: Signal<HashSet<String>>,
+    /// Bluetooth connects in flight, keyed by address (drives every spinner, and lets
+    /// an untick undo a connect that was already past the point of no return).
+    pub connects: Signal<Connects>,
     /// Volume before muting, per UID.
     pub premute: Signal<HashMap<String, f32>>,
     pub loaded: Signal<bool>,
@@ -80,7 +81,7 @@ impl AppState {
             last_audio_error: Signal::new(None),
             last_bt_error: Signal::new(None),
             bt_permission: Signal::new(false),
-            connecting: Signal::new(HashSet::new()),
+            connects: Signal::new(Connects::default()),
             premute: Signal::new(HashMap::new()),
             loaded: Signal::new(false),
             together_wanted: Signal::new(false),
@@ -222,7 +223,7 @@ fn keep_mic_off_headphones(b: &Backends) {
 /// While the user wants to listen together, undo macOS switching the output to a
 /// pair that just connected, and fold newly connected chosen headphones in.
 fn keep_together_now(mut state: AppState, b: Backends) {
-    if !*state.together_wanted.peek() || *state.busy.peek() || !state.connecting.peek().is_empty() {
+    if !*state.together_wanted.peek() || *state.busy.peek() || state.connects.peek().any() {
         return;
     }
     keep_mic_off_headphones(&b);
@@ -351,23 +352,53 @@ pub fn set_volume(mut state: AppState, b: Backends, id: DeviceId, uid: String, v
     });
 }
 
-pub fn connect(mut state: AppState, b: Backends, address: String) {
-    if !state.connecting.write().insert(address.clone()) {
+/// A connect the user unticked before it returned: `openConnection` can't be
+/// interrupted, so if it landed anyway, put the pair back the way they left it.
+async fn undo_connect(state: AppState, b: Backends, address: &str, landed_ok: bool) {
+    if !landed_ok {
+        crate::dlog!("connect {address}: unticked meanwhile, ignoring result");
         return;
     }
+    crate::dlog!("connect {address}: unticked meanwhile, disconnecting again");
+    let (bt, addr) = (b.bluetooth.clone(), address.to_string());
+    if let Err(e) = blocking(move || bt.disconnect(&addr)).await {
+        crate::dlog!("disconnect {address} after cancel: {e}");
+    }
+    refresh_audio(state, b).await;
+}
+
+pub fn connect(mut state: AppState, b: Backends, address: String) {
+    let Some(token) = state.connects.write().begin(&address) else {
+        return; // already connecting to this pair
+    };
     spawn_forever(async move {
         let (bt, addr) = (b.bluetooth.clone(), address.clone());
-        match blocking(move || bt.connect(&addr)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(crate::audio::AudioError::Bluetooth(msg))) => {
-                state.show_toast(format!("Couldn't connect: {msg}"), true)
+        let result = blocking(move || bt.connect(&addr)).await;
+        // Clear the spinner before the refresh: enumerating outputs and paging the
+        // Bluetooth daemon can take seconds, and the user already unticked the pair by then.
+        let landed = state.connects.write().finish(&address, token);
+        match landed {
+            Landed::Current => {
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(crate::audio::AudioError::Bluetooth(msg))) => {
+                        state.show_toast(format!("Couldn't connect: {msg}"), true)
+                    }
+                    Ok(Err(e)) => state.error(format!("Couldn't connect: {e}")),
+                    Err(e) => state.error(e),
+                }
+                refresh(state.to_owned(), b.clone()).await;
+                sync_if_playing(state, b);
             }
-            Ok(Err(e)) => state.error(format!("Couldn't connect: {e}")),
-            Err(e) => state.error(e),
+            // Unticked mid-connect: `openConnection` can't be interrupted, so if it
+            // landed anyway, put the pair back the way the user left it.
+            Landed::Cancelled => {
+                undo_connect(state, b, &address, matches!(result, Ok(Ok(())))).await;
+            }
+            Landed::Superseded => {
+                crate::dlog!("connect {address}: a newer connect is in flight, ignoring result");
+            }
         }
-        refresh(state.to_owned(), b.clone()).await;
-        state.connecting.write().remove(&address);
-        sync_if_playing(state, b);
     });
 }
 
@@ -471,12 +502,20 @@ pub fn listen_together(mut state: AppState, b: Backends, plan: &Together) {
     }
     // Connect one at a time (Bluetooth controllers dislike parallel pages), then
     // keep_together_now picks the result up and builds the Duet output.
-    state.connecting.write().extend(missing.iter().cloned());
     spawn_forever(async move {
         for addr in missing {
+            let Some(token) = state.connects.write().begin(&addr) else {
+                continue; // someone else is already connecting this pair
+            };
             let (bt, a) = (b.bluetooth.clone(), addr.clone());
             crate::dlog!("connect {addr}…");
-            match blocking(move || bt.connect(&a)).await {
+            let result = blocking(move || bt.connect(&a)).await;
+            let landed = state.connects.write().finish(&addr, token);
+            if landed != Landed::Current {
+                undo_connect(state, b.clone(), &addr, matches!(result, Ok(Ok(())))).await;
+                continue;
+            }
+            match result {
                 Ok(Ok(())) => crate::dlog!("connected {addr}"),
                 Ok(Err(crate::audio::AudioError::Bluetooth(msg))) => {
                     state.show_toast(format!("Couldn't connect: {msg}"), true)
@@ -484,7 +523,6 @@ pub fn listen_together(mut state: AppState, b: Backends, plan: &Together) {
                 Ok(Err(e)) => state.error(format!("Couldn't connect: {e}")),
                 Err(e) => state.error(e),
             }
-            state.connecting.write().remove(&addr);
         }
         // The new outputs can take a moment to appear in CoreAudio.
         for _ in 0..8 {
@@ -542,6 +580,11 @@ pub fn toggle_listener(mut state: AppState, b: Backends, address: String, connec
     if added && !connected {
         connect(state, b, address);
     } else {
+        // Unticking a pair whose connect is still in the OS call: stop saying
+        // "Connecting…" now and let the pending connect undo itself when it lands.
+        if state.connects.write().cancel(&address) {
+            crate::dlog!("connect {address}: cancelled from the picker");
+        }
         sync_if_playing(state, b);
     }
 }
@@ -768,12 +811,12 @@ fn TogetherSection() -> Element {
             } else {
                 button {
                     class: if active { "primary active" } else { "primary" },
-                    disabled: active || busy || !plan.can_start() || !state.connecting.read().is_empty(),
+                    disabled: active || busy || !plan.can_start() || state.connects.read().any(),
                     onclick: move |_| listen_together(state, backends.clone(), &plan),
                     if active {
                         span { class: "btn-icon", dangerous_inner_html: icons::CHECK }
                         "Listening together"
-                    } else if !state.connecting.read().is_empty() {
+                    } else if state.connects.read().any() {
                         span { class: "spinner small" }
                         "Connecting…"
                     } else if !plan.to_connect().is_empty() {
@@ -821,7 +864,7 @@ fn HeadphonePicker() -> Element {
     .filter_map(|l| crate::audio::address_from_uid(l.uid()))
     .collect();
     let choices = headphone_choices(&state.devices.read(), &state.paired.read());
-    let connecting = state.connecting.read().clone();
+    let connecting = state.connects.read().clone();
     rsx! {
         section { class: "card picker",
             div { class: "picker-head",
@@ -840,7 +883,7 @@ fn HeadphonePicker() -> Element {
                 for (addr, name, connected) in choices {
                     {
                         let on = chosen.contains(&addr);
-                        let busy = connecting.contains(&addr);
+                        let busy = connecting.is_connecting(&addr);
                         let b = backends.clone();
                         let a = addr.clone();
                         let status = if busy { "Connecting…" } else if connected { "Connected" } else { "Not connected" };
@@ -950,7 +993,7 @@ fn ListenerCard(listener: Listener, index: usize) -> Element {
         }
         Listener::Disconnected { bluetooth, .. } => {
             let addr = bluetooth.address.clone();
-            let is_connecting = state.connecting.read().contains(&addr);
+            let is_connecting = state.connects.read().is_connecting(&addr);
             let b = backends.clone();
             rsx! {
                 button {

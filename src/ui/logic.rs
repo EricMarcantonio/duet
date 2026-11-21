@@ -686,6 +686,72 @@ pub fn noise_hint(
     (apple && info.supported_modes.is_empty()).then_some(hint)
 }
 
+/// Bluetooth connects that are in flight, keyed by normalised address.
+///
+/// A connect runs `-[IOBluetoothDevice openConnection]`, which is synchronous and
+/// cannot be interrupted, so unticking a pair can't abort it. Instead each connect
+/// carries a generation token: `cancel` stops the spinner at once and marks the
+/// token stale, and [`Connects::finish`] tells the caller what the late result
+/// means — keep the device, switch it back off, or leave a newer connect alone.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Connects {
+    next: u64,
+    /// Addresses with a connect in flight, and the token that owns them.
+    active: HashMap<String, u64>,
+}
+
+/// What a finished connect means, given what the user asked for meanwhile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Landed {
+    /// Still wanted: clear the spinner and keep the pair.
+    Current,
+    /// The user unticked it after the connect started: clear and connect it back off.
+    Cancelled,
+    /// Another connect for the same address is in flight; that one reports instead.
+    Superseded,
+}
+
+impl Connects {
+    /// Claim `address` for a connect. `None` when one is already in flight for it.
+    pub fn begin(&mut self, address: &str) -> Option<u64> {
+        let address = normalize_address(address);
+        if self.active.contains_key(&address) {
+            return None;
+        }
+        self.next += 1;
+        self.active.insert(address, self.next);
+        Some(self.next)
+    }
+
+    /// The user changed their mind: stop showing the pair as connecting now.
+    /// Returns whether a connect was in flight.
+    pub fn cancel(&mut self, address: &str) -> bool {
+        self.active.remove(&normalize_address(address)).is_some()
+    }
+
+    /// Classify the result of the connect that `token` was issued for.
+    pub fn finish(&mut self, address: &str, token: u64) -> Landed {
+        let address = normalize_address(address);
+        match self.active.get(&address) {
+            Some(owner) if *owner == token => {
+                self.active.remove(&address);
+                Landed::Current
+            }
+            Some(_) => Landed::Superseded,
+            None => Landed::Cancelled,
+        }
+    }
+
+    pub fn is_connecting(&self, address: &str) -> bool {
+        self.active.contains_key(&normalize_address(address))
+    }
+
+    /// Whether any connect is in flight (the “Connecting…” state of the main card).
+    pub fn any(&self) -> bool {
+        !self.active.is_empty()
+    }
+}
+
 /// A mode the user just picked wins over polled state until the device reports
 /// it (or a few seconds pass), so the switcher doesn't flicker back.
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -1294,5 +1360,70 @@ mod tests {
         ));
         assert!(is_bluetooth_permission_error("Permission denied"));
         assert!(!is_bluetooth_permission_error("device 40 not found"));
+    }
+
+    #[test]
+    fn unticking_a_headphone_stops_its_spinner_at_once() {
+        let mut connects = Connects::default();
+        let token = connects.begin("02-1b-2c-3d-4e-5f").expect("connect starts");
+        assert!(connects.is_connecting("02-1B-2C-3D-4E-5F"));
+        assert!(connects.any());
+
+        // The user unticks while the OS connect is still blocking.
+        assert!(connects.cancel("02-1b-2c-3d-4e-5f"));
+        assert!(
+            !connects.is_connecting("02-1B-2C-3D-4E-5F"),
+            "untick must clear the spinner immediately, not when the OS call returns"
+        );
+        assert!(!connects.any());
+
+        // When the uncancellable connect finally lands, it must be undone.
+        assert_eq!(
+            connects.finish("02-1b-2c-3d-4e-5f", token),
+            Landed::Cancelled
+        );
+    }
+
+    #[test]
+    fn a_connect_that_is_still_wanted_lands_normally() {
+        let mut connects = Connects::default();
+        let token = connects.begin("02-1b-2c-3d-4e-5f").expect("connect starts");
+        assert_eq!(connects.finish("02-1b-2c-3d-4e-5f", token), Landed::Current);
+        assert!(!connects.is_connecting("02-1B-2C-3D-4E-5F"));
+    }
+
+    #[test]
+    fn a_second_tick_for_the_same_address_does_not_start_twice() {
+        let mut connects = Connects::default();
+        assert!(connects.begin("02-1b-2c-3d-4e-5f").is_some());
+        assert!(connects.begin("02-1b-2c-3d-4e-5f").is_none());
+    }
+
+    #[test]
+    fn reticking_after_an_untick_wins_over_the_stale_connect() {
+        let mut connects = Connects::default();
+        let stale = connects.begin("02-1b-2c-3d-4e-5f").expect("connect starts");
+        connects.cancel("02-1b-2c-3d-4e-5f");
+        let fresh = connects
+            .begin("02-1b-2c-3d-4e-5f")
+            .expect("re-connect starts");
+
+        // The stale connect landing must not switch off the pair the user wants again.
+        assert_eq!(
+            connects.finish("02-1b-2c-3d-4e-5f", stale),
+            Landed::Superseded
+        );
+        assert!(
+            connects.is_connecting("02-1B-2C-3D-4E-5F"),
+            "the fresh connect still owns the spinner"
+        );
+        assert_eq!(connects.finish("02-1b-2c-3d-4e-5f", fresh), Landed::Current);
+    }
+
+    #[test]
+    fn cancelling_with_nothing_in_flight_is_a_no_op() {
+        let mut connects = Connects::default();
+        assert!(!connects.cancel("02-1b-2c-3d-4e-5f"));
+        assert!(!connects.any());
     }
 }
