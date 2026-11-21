@@ -349,23 +349,37 @@ detect_screen_input() {
     fi
 }
 
-CAPTURE_MODE=avfoundation
+# Capture modes, best first:
+#   window        screencapture -l <window id>, frame by frame. Records the
+#                 window itself, so it works while another app is in front, on
+#                 another Space, or in full screen — screen grabs cannot.
+#   avfoundation  ffmpeg screen device, cropped to the window rect afterwards.
+#   screen        screencapture -v -R, cropped at record time.
+# DEMO_CAPTURE overrides the choice.
+CAPTURE_MODE="${DEMO_CAPTURE:-window}"
 AV_INPUT=""
-if have ffmpeg; then
-    AV_INPUT="$(detect_screen_input)"
-    if [[ -z "$AV_INPUT" ]]; then
-        CAPTURE_MODE=screencapture
-        note "avfoundation lists no \"Capture screen\" device (Screen Recording not"
-        note "granted to this terminal, or no screen device) -> using the"
-        note "screencapture -v fallback. Grant Screen Recording and re-run for the"
-        note "preferred path: System Settings > Privacy & Security > Screen Recording."
-    else
-        note "ok: avfoundation screen input \"$AV_INPUT\""
-    fi
-else
-    AV_INPUT="1:none"
-    note "MISSING (dry run continues): ffmpeg — assuming screen input \"1:none\""
-fi
+case "$CAPTURE_MODE" in
+    window)
+        note "ok: capture mode: window (screencapture -l, immune to other apps and Spaces)"
+        ;;
+    avfoundation | screen)
+        if have ffmpeg; then
+            AV_INPUT="$(detect_screen_input)"
+            if [[ "$CAPTURE_MODE" == "avfoundation" && -z "$AV_INPUT" ]]; then
+                note "avfoundation lists no \"Capture screen\" device -> falling back to window capture"
+                CAPTURE_MODE=window
+            else
+                note "ok: capture mode: $CAPTURE_MODE${AV_INPUT:+ (input \"$AV_INPUT\")}"
+            fi
+        else
+            AV_INPUT="1:none"
+            note "MISSING (dry run continues): ffmpeg — assuming screen input \"1:none\""
+        fi
+        ;;
+    *)
+        die "DEMO_CAPTURE must be window, avfoundation or screen (got: $CAPTURE_MODE)"
+        ;;
+esac
 if ((DRY_RUN)); then
     note "capture mode: $CAPTURE_MODE"
 fi
@@ -641,6 +655,95 @@ capture_screencapture() {
     REC_PID=$!
 }
 
+# Resolve the mock window's id: `screencapture -l` needs it, and no CLI tool
+# prints it. A ~20 line Swift helper is compiled once per run into $TMP.
+window_id_swift="$TMP/winid.swift"
+window_id_bin="$TMP/winid"
+write_window_id_tool() {
+    write_text_file "$window_id_swift" 'import CoreGraphics
+import Foundation
+
+// Window ids for a process name, best first: on screen, layer 0, then any.
+// `optionOnScreenOnly` would miss a window sitting on another Space, which is
+// exactly the case this script has to survive (the operator may be in a
+// full-screen app while the take records the Duet window underneath).
+let want = CommandLine.arguments.count > 1 ? CommandLine.arguments[1].lowercased() : "duet"
+let opts: CGWindowListOption = [.optionAll, .excludeDesktopElements]
+guard let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else { exit(2) }
+var scored: [(Int, Int)] = []
+for w in list {
+    let owner = (w[kCGWindowOwnerName as String] as? String ?? "").lowercased()
+    guard owner == want, let id = w[kCGWindowNumber as String] as? Int else { continue }
+    let layer = w[kCGWindowLayer as String] as? Int ?? 99
+    let onscreen = w[kCGWindowIsOnscreen as String] as? Bool ?? false
+    scored.append((layer == 0 ? (onscreen ? 0 : 1) : 2, id))
+}
+for (_, id) in scored.sorted(by: { $0.0 < $1.0 }) { print(id) }
+exit(scored.isEmpty ? 1 : 0)
+'
+}
+
+resolve_window_id() {
+    write_window_id_tool
+    if ((DRY_RUN)); then
+        printf '   $ swiftc -O %s.swift -o %s\n' "$window_id_bin" "$window_id_bin"
+        printf '   $ %s duet   # -> window id\n' "$window_id_bin"
+        WINDOW_ID=0
+        return 0
+    fi
+    printf '   $ swiftc -O %s -o %s\n' "$(fmt_cmd "$window_id_swift")" "$(fmt_cmd "$window_id_bin")"
+    swiftc -O "$window_id_swift" -o "$window_id_bin" ||
+        die "swiftc could not build the window-id helper"
+    printf '   $ %s duet   # -> window ids, best first\n' "$(fmt_cmd "$window_id_bin")"
+    # Not through `run`: under `set -e` a non-zero command substitution aborts the
+    # script with no message at all, which cost an hour of guessing.
+    local ids
+    if ! ids="$("$window_id_bin" duet)"; then
+        die "could not find the Duet window (CGWindowListCopyWindowInfo found no layer-0 window owned by \"duet\")"
+    fi
+    WINDOW_ID="${ids%%$'\n'*}"
+    note "ok: window id $WINDOW_ID"
+}
+
+# Frame-by-frame window capture: each `screencapture -l` grabs the window's own
+# contents, so whatever else is on screen — another app, another Space, a
+# full-screen player — never ends up in the take. Paced to WINDOW_FPS; the
+# frames are assembled into the same intermediate file the other modes produce.
+WINDOW_FPS=12
+capture_window() {
+    say "Capture (window $WINDOW_ID, ${WINDOW_FPS} fps for ${TOTAL}s)"
+    local frames="$TMP/frames" start now count
+    mkdir -p "$frames"
+    printf '   $ screencapture -x -o -l %s %s/%%05d.png   (~%s fps)\n' "$WINDOW_ID" "$frames" "$WINDOW_FPS"
+    if ((DRY_RUN)); then
+        REC_PID=""
+        return 0
+    fi
+    (
+        start="$(python3 -c 'import time; print(time.time())')"
+        count=0
+        while :; do
+            count=$((count + 1))
+            screencapture -x -o -l "$WINDOW_ID" "$(printf '%s/%05d.png' "$frames" "$count")" 2>/dev/null || true
+            now="$(python3 -c 'import time; print(time.time())')"
+            elapsed="$(python3 -c "print($now - $start)")"
+            awk -v e="$elapsed" -v t="$TOTAL" 'BEGIN { exit !(e >= t) }' && break
+            # pace: sleep whatever is left of this frame's slot
+            sleep "$(python3 -c "
+slot = 1.0 / $WINDOW_FPS
+used = $now - $start - ($count / $WINDOW_FPS)
+print(max(0.0, min(slot, -used + slot)))")"
+        done
+        # Assemble: the measured rate keeps the pacing honest even if a frame
+        # grab ran long on a busy machine.
+        rate="$(python3 -c "print(max(1.0, $count / max(0.1, $elapsed)))")"
+        ffmpeg -y -hide_banner -loglevel warning -framerate "$rate" \
+            -i "$frames/%05d.png" \
+            -c:v libx264 -preset veryfast -crf 16 -pix_fmt yuv420p "$RAW" >/dev/null 2>&1
+    ) &
+    REC_PID=$!
+}
+
 # ---------------------------------------------------------------------------
 # 6. Grade: one documented filter chain for the VHS look
 # ---------------------------------------------------------------------------
@@ -652,6 +755,7 @@ build_grade_filter() {
     local parts=() graph
     if [[ "$CAPTURE_MODE" == "avfoundation" ]]; then
         # Fraction-of-frame crop == the window rect, whatever the density is.
+        # Window mode needs none: the grab is already exactly the window.
         parts+=("crop=w=trunc(iw*${WIN_W}/${SCREEN_W}):h=trunc(ih*${WIN_H}/${SCREEN_H}):x=trunc(iw*${WX}/${SCREEN_W}):y=trunc(ih*${WY}/${SCREEN_H})")
     fi
     parts+=("scale=${MP4_W}:-2:flags=lanczos")              # fixed size, even height
@@ -948,6 +1052,11 @@ fi
 say "Focus"
 focus_window
 
+# The window id is only known once the window exists: resolve it after positioning.
+if [[ "$CAPTURE_MODE" == "window" ]]; then
+    resolve_window_id
+fi
+
 # Pre-roll: open the picker before the recorder starts, so the first frame is the
 # populated panel instead of the idle window with its empty bottom half.
 if ((!DRY_RUN)); then
@@ -958,32 +1067,44 @@ fi
 # The capture starts first and stops itself at $TOTAL; the performance plays into
 # it. Doing it in that order means the recorder never has to be signalled.
 if ((DRY_RUN)); then
-    if [[ "$CAPTURE_MODE" == "avfoundation" ]]; then
-        capture_ffmpeg
-    else
-        capture_screencapture
-    fi
+    case "$CAPTURE_MODE" in
+        window) capture_window ;;
+        avfoundation) capture_ffmpeg ;;
+        *) capture_screencapture ;;
+    esac
     pause "$REC_LEAD"
     perform
-elif [[ "$CAPTURE_MODE" == "avfoundation" ]]; then
-    capture_ffmpeg &
-    REC_PID=$!
-    pause "$REC_LEAD"
-    perform
-    if ! wait "$REC_PID"; then
-        die "ffmpeg exited non-zero while capturing — see its output above"
-    fi
-    REC_PID=""
 else
-    capture_screencapture
-    pause "$REC_LEAD"
-    perform
-    wait "$REC_PID" 2>/dev/null || true
-    REC_PID=""
+    case "$CAPTURE_MODE" in
+        window)
+            capture_window
+            pause "$REC_LEAD"
+            perform
+            wait "$REC_PID" 2>/dev/null || true
+            REC_PID=""
+            ;;
+        avfoundation)
+            capture_ffmpeg &
+            REC_PID=$!
+            pause "$REC_LEAD"
+            perform
+            if ! wait "$REC_PID"; then
+                die "ffmpeg exited non-zero while capturing — see its output above"
+            fi
+            REC_PID=""
+            ;;
+        *)
+            capture_screencapture
+            pause "$REC_LEAD"
+            perform
+            wait "$REC_PID" 2>/dev/null || true
+            REC_PID=""
+            ;;
+    esac
 fi
 
 RAW_FILE="$RAW"
-if [[ "$CAPTURE_MODE" != "avfoundation" ]]; then
+if [[ "$CAPTURE_MODE" == "screencapture" || "$CAPTURE_MODE" == "screen" ]]; then
     RAW_FILE="$RAW_SC"
 fi
 
