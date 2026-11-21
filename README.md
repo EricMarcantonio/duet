@@ -36,12 +36,21 @@ the GIF is 640 px and tape-graded.
 brew install --cask EricMarcantonio/duet/duet
 ```
 
-The cask lives in [`packaging/homebrew/duet.rb`](packaging/homebrew/duet.rb), but **the tap is
-not published yet**, so this command fails today;
-[`packaging/homebrew/README.md`](packaging/homebrew/README.md) has the three steps that publish
-it. Use the tap-qualified name above: Homebrew's core `homebrew-cask`
-already ships a cask called `duet` (Duet Display, the iPad-as-a-second-screen tool), so a
-bare `brew install --cask duet` installs that app, not this one.
+Homebrew 7 will not load a cask from a third-party tap until you trust it once:
+
+```sh
+brew trust ericmarcantonio/duet
+```
+
+Use the tap-qualified name above. Homebrew's core `homebrew-cask` already ships a cask
+called `duet` (Duet Display, the iPad-as-a-second-screen tool), so a bare
+`brew install --cask duet` installs that app, not this one.
+
+Duet's **Check for updates** notices when you installed through Homebrew and offers
+`brew upgrade --cask duet`. The cask itself lives in
+[`packaging/homebrew/duet.rb`](packaging/homebrew/duet.rb) and is mirrored to
+[`EricMarcantonio/homebrew-duet`](https://github.com/EricMarcantonio/homebrew-duet);
+[`packaging/homebrew/README.md`](packaging/homebrew/README.md) covers maintaining it.
 
 ### macOS 11+ (Apple Silicon & Intel)
 
