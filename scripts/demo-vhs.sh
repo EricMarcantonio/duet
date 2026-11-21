@@ -99,35 +99,37 @@ X_DONE=357            # picker header "Done" link (spans 342..372)
 X_SLIDER_FROM=199     # listener volume thumb at 52 % (track x 50..338)
 X_SLIDER_TO=268       # ... dragged to ~78 %
 
-Y_CTA_OPEN_PICKER=152 # "Choose headphones": button spans 141..179 when the hero
-                      # sub wraps to two lines, 125..163 when it does not
-Y_CTA_LISTEN=139      # "Listen together": spans 130..168 with a two-line title,
-                      # 111..149 with a one-line title
+Y_CTA_OPEN_PICKER=160 # "Choose headphones": button spans 141..179 with the hero
+                      # sub on two lines (measured)
+Y_CTA_LISTEN=150      # "Listen together" / "Listening together": spans 130..170
+                      # once two pairs are chosen (measured)
 # With DUET_MOCK=1 the picker sorts connected-first, then by name, so the rows
 # are: 1 Alex's AirPod Pro 2's (connected), 2 Alex's AirPods Pro (its connect
 # always fails in the mock — never tick it), 3 Sam's AirPods Pro #2 (not
 # connected, so ticking it shows "Connecting…" for ~2 s).
-Y_PICK_ROW1=258       # first paired pair, before the group exists
-Y_PICK_ROW2=292       # second row (kept for re-tuning / extra beats)
-Y_PICK_ROW3=326       # third row: the pair that is not connected yet (ticked first)
-Y_PICK_ROW1_LIVE=277  # first row once both pairs are connected / group is live
-Y_SLIDER=487          # first listener's volume slider, with the picker open
-Y_DONE=226            # picker header "Done" link
+#
+# All values below were measured from the real mock window on a 1728x1117 display
+# at (664,258) 400x600, not derived: screenshot, crop, read the row centres.
+Y_PICK_ROW1=285       # picker open, hero on three lines (before anything is ticked)
+Y_PICK_ROW2=318       # the pair whose connect fails in the mock — never tick it
+Y_PICK_ROW3=350       # Sam's, not connected yet: ticking it shows "Connecting…"
+Y_PICK_ROW1_LIVE=264  # group live: same as the connected layout
+Y_SLIDER=490          # first listener's volume slider, picker open, group live
+Y_DONE=211            # picker header "Done" link once the hero is two lines
 
 # ---------------------------------------------------------------------------
-# Timing — the performance is ~34 s (the plan asks for ~35 s). These are the only
-# knobs for pacing: stretch one to slow the take down, shorten them all if the
-# GIF will not fit its budget.
+# Timing — the performance is ~15 s: short enough for a small GIF, long enough to
+# read each beat. These are the only knobs for pacing.
 # ---------------------------------------------------------------------------
-T_START=3.0      # let the window paint after the capture starts
-T_OPEN=2.2       # click "Choose headphones"; the picker drops in
-T_CONNECTING=2.0 # hold on the row's "Connecting…" spinner
-T_CONNECT=3.5    # the mock's connect takes 2 s (src/ui/demo.rs) + UI settle
-T_TOGETHER=5.5   # "Listen together": the Duet output is created, cards slide in
-T_DRAG=4.5       # volume drag plus the readout settling
-T_UNTICK=4.5     # untick a pair; the group shrinks back to one listener
-T_DONE=5.0       # close the picker; the hero settles
-T_TAIL=3.0       # hold the finished state before the capture stops
+T_START=2.6      # let the window paint after the capture starts
+T_OPEN=1.8       # pre-roll click: "Choose headphones"; the picker drops in
+T_CONNECTING=2.4 # hold on the row's "Connecting…" spinner (mock connect is 2 s)
+T_CONNECT=2.6    # the pair lands Connected and the rows shift up
+T_TOGETHER=3.2   # "Listen together": the Duet output is created, cards slide in
+T_DRAG=2.6       # volume drag plus the readout settling
+T_UNTICK=0       # unused: the untick beat is skipped so the take stays under 15 s
+T_DONE=2.6       # close the picker; the hero settles
+T_TAIL=1.8       # hold the finished state before the capture stops
 
 # The recorder starts before the first click, so its spin-up has to be part of
 # the capture duration or the tail of the take is cut off.
@@ -297,6 +299,16 @@ fi
 
 if ((!DRY_RUN)); then
     [[ -x "$BIN" ]] || die "no executable at $BIN — run cargo build (or drop DEMO_SKIP_BUILD)"
+
+    # An installed Duet.app puts its popover in the same screen region this script
+    # frames, and it sits above our mock window: the take then records the real app
+    # (wrong version in the footer, the user's real headphones) instead of the mock.
+    if pgrep -f "Applications/Duet\.app/Contents/MacOS/duet" >/dev/null 2>&1; then
+        die "an installed Duet.app is running; quit it first (osascript -e 'quit app \"Duet\"')
+           so the take shows this build and not your real popover.
+           Set DEMO_ALLOW_RUNNING_APP=1 to record anyway."
+    fi
+
     mkdir -p "$DOCS"
 fi
 
@@ -535,38 +547,35 @@ osascript_sys_events() { # inner AppleScript run against `process "<APP_NAME>"`
 
 perform() {
     say "Performance (~${PERFORM}s)"
+    # The picker opens in the pre-roll: with it open the panel fills the window,
+    # so the take never shows the empty bottom half the mock has when idle.
     pause "$T_START"
-
-    # 1. open the picker from the hero CTA ("Choose headphones")
     click "$X_CTA" "$Y_CTA_OPEN_PICKER"
     pause "$T_OPEN"
 
-    # 2. tick the pair that is not connected yet -> the row shows "Connecting…"
+    # 1. tick the pair that is not connected: the row shows "Connecting…" and the
+    #    hero's CTA goes disabled — the state this project just learned to cancel.
     #    (the mock connect sleeps 2 s: src/ui/demo.rs LinkedBluetooth::connect)
     click "$X_PICK_NAME" "$Y_PICK_ROW3"
     pause "$T_CONNECTING"
 
-    # 3. tick the already-connected pair -> two chosen, the CTA becomes usable
-    click "$X_PICK_NAME" "$Y_PICK_ROW1"
+    # 2. it lands Connected; the rows shift up because the hero loses a line
     pause "$T_CONNECT"
 
-    # 4. Listen together: the "Duet" output is created and the cards appear
+    # 3. Listen together: the "Duet" output is created and the cards appear
     click "$X_CTA" "$Y_CTA_LISTEN"
     pause "$T_TOGETHER"
 
-    # 5. drag the first listener's volume slider from 52 % to ~78 %.
+    # 4. drag the first listener's volume slider from 52 % to ~78 %.
     #    cliclick drags with `dd` (press at) … `du` (release at).
     run cliclick -e 12 "m:$(abs_x "$X_SLIDER_FROM"),$(abs_y "$Y_SLIDER")"
     run cliclick -e 30 "dd:$(abs_x "$X_SLIDER_FROM"),$(abs_y "$Y_SLIDER")" \
         "du:$(abs_x "$X_SLIDER_TO"),$(abs_y "$Y_SLIDER")"
     pause "$T_DRAG"
 
-    # 6. untick the first pair: the group shrinks back to one listener
-    click "$X_PICK_NAME" "$Y_PICK_ROW1_LIVE"
-    pause "$T_UNTICK"
-
-    # 7. close the picker
+    # 5. close the picker so the take ends on the listener cards
     click "$X_DONE" "$Y_DONE"
+    pause "$T_DONE"
     pause "$T_TAIL"
 }
 
