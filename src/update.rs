@@ -144,24 +144,27 @@ pub fn state_for(tag: &str, url: &str, current: &str, kind: InstallKind) -> Upda
 ///
 /// Never called on the UI thread: see `ui::app::check_for_updates`.
 pub fn fetch_latest() -> Result<String, String> {
-    fetch_latest_in(
+    fetch_with(
+        "curl",
         &std::env::var("PATH").unwrap_or_default(),
         Some(FETCH_TIMEOUT),
     )
 }
 
-/// [`fetch_latest`] with an injectable search path, so a machine without curl
-/// can be simulated in a unit test (no network is touched either way).
+/// [`fetch_latest`] with an injectable program name and search path, so a test
+/// can prove the missing-tool path without needing a network or a PATH that a
+/// platform silently ignores (Windows finds `curl` in System32 whatever `PATH`
+/// says).
 ///
 /// A missing or unusable `curl` becomes an error string that names it, because
 /// the only reader is a log line and a tooltip.
-fn fetch_latest_in(path_env: &str, timeout: Option<Duration>) -> Result<String, String> {
+fn fetch_with(program: &str, path_env: &str, timeout: Option<Duration>) -> Result<String, String> {
     let seconds = timeout
         .unwrap_or(FETCH_TIMEOUT)
         .as_secs()
         .max(1)
         .to_string();
-    let output = std::process::Command::new("curl")
+    let output = std::process::Command::new(program)
         .args([
             "-sSL",
             "--max-time",
@@ -172,16 +175,16 @@ fn fetch_latest_in(path_env: &str, timeout: Option<Duration>) -> Result<String, 
         ])
         .env("PATH", path_env)
         .output()
-        .map_err(|e| format!("couldn't run curl: {e}"))?;
+        .map_err(|e| format!("couldn't run {program}: {e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
-            "curl exited with {}: {}",
+            "{program} exited with {}: {}",
             output.status,
             stderr.trim()
         ));
     }
-    String::from_utf8(output.stdout).map_err(|e| format!("curl printed non-UTF-8: {e}"))
+    String::from_utf8(output.stdout).map_err(|e| format!("{program} printed non-UTF-8: {e}"))
 }
 
 /// Map one finished fetch onto the footer state.
@@ -302,14 +305,23 @@ mod tests {
         );
     }
 
-    /// No curl on the machine is a normal failure, not a panic, and the message
-    /// has to say what is missing or the log line is useless.
+    /// A missing or broken fetch tool is a normal failure, not a panic, and the
+    /// message has to say what is missing or the log line is useless.
+    ///
+    /// The program name is injected rather than relying on an empty `PATH`: on
+    /// Windows the OS finds `curl.exe` in System32 regardless of `PATH`, which
+    /// made the previous version of this test hit the real API in CI.
     #[test]
-    fn a_missing_curl_fails_with_a_message_naming_it() {
-        let empty = std::env::temp_dir().join("duet-no-curl");
-        std::fs::create_dir_all(&empty).unwrap();
-        let err = fetch_latest_in(&empty.to_string_lossy(), None).unwrap_err();
-        assert!(err.contains("curl"), "unhelpful error: {err}");
+    fn a_missing_fetch_tool_fails_with_a_message_naming_it() {
+        let err = fetch_with("duet-no-such-curl", "/nonexistent", None).unwrap_err();
+        assert!(err.contains("duet-no-such-curl"), "unhelpful error: {err}");
+        assert!(
+            matches!(
+                outcome(Err(err), "0.2.0", InstallKind::Direct),
+                UpdateState::Failed(_)
+            ),
+            "a fetch failure must surface as Failed, never as up to date"
+        );
     }
 
     #[test]
