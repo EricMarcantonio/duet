@@ -42,6 +42,22 @@ fn env_flag(name: &str) -> Option<String> {
         .filter(|v| !v.is_empty() && v != "0")
 }
 
+/// Page zoom for recording: the panel's layout is a fixed 400x600 pt, so a
+/// capture otherwise gets only the display's own 2x. Zooming re-renders the
+/// text at the higher scale instead of upscaling it, which is what the README
+/// clip needs. Unset, or out of range, means no zoom.
+/// Pure part of [`demo_zoom`]: one rule, no environment, so it can be tested.
+fn parse_zoom(value: Option<&str>) -> f64 {
+    value
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|z| (1.0..=3.0).contains(z))
+        .unwrap_or(1.0)
+}
+
+fn demo_zoom() -> f64 {
+    parse_zoom(env_flag("DUET_ZOOM").as_deref())
+}
+
 fn main() {
     let mock = env_flag("DUET_MOCK");
     let backends = match &mock {
@@ -63,9 +79,12 @@ fn main() {
         (None, None) => Config::default_path(),
     };
 
+    // The zoom scales the page, so the window has to grow with it or the
+    // layout would be cropped at the edges.
+    let zoom = demo_zoom();
     let mut window = WindowBuilder::new()
         .with_title("Duet")
-        .with_inner_size(LogicalSize::new(400.0, 600.0))
+        .with_inner_size(LogicalSize::new(400.0 * zoom, 600.0 * zoom))
         .with_min_inner_size(LogicalSize::new(360.0, 440.0));
 
     window = match mode {
@@ -109,6 +128,31 @@ fn main() {
     dioxus::LaunchBuilder::desktop()
         .with_cfg(cfg)
         .with_context(backends)
-        .with_context(AppOptions { mode, config_path })
+        .with_context(AppOptions {
+            mode,
+            config_path,
+            zoom,
+        })
         .launch(App);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_zoom;
+
+    #[test]
+    fn zoom_is_off_unless_it_is_a_sane_multiplier() {
+        assert_eq!(parse_zoom(None), 1.0);
+        assert_eq!(parse_zoom(Some("1.6")), 1.6);
+        assert_eq!(parse_zoom(Some("2")), 2.0);
+    }
+
+    #[test]
+    fn a_nonsense_zoom_falls_back_to_off() {
+        assert_eq!(parse_zoom(Some("")), 1.0);
+        assert_eq!(parse_zoom(Some("abc")), 1.0);
+        assert_eq!(parse_zoom(Some("0.5")), 1.0);
+        assert_eq!(parse_zoom(Some("9")), 1.0);
+        assert_eq!(parse_zoom(Some("-2")), 1.0);
+    }
 }

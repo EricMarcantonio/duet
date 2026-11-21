@@ -20,6 +20,9 @@ const TOAST_TTL: Duration = Duration::from_secs(6);
 pub struct AppOptions {
     pub mode: WindowMode,
     pub config_path: PathBuf,
+    /// Page zoom applied once the webview exists (1.0 = off). Only a recording
+    /// aid: see `demo_zoom()` in `main.rs`.
+    pub zoom: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -636,6 +639,12 @@ pub fn App() -> Element {
     let opts = use_context::<AppOptions>();
     let state = use_context_provider(|| AppState::new(&opts));
     let mode = opts.mode;
+
+    use_effect(move || {
+        if opts.zoom > 1.0 {
+            dioxus::desktop::window().set_zoom_level(opts.zoom);
+        }
+    });
 
     {
         let b = backends.clone();
