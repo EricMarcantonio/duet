@@ -10,12 +10,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// `owner/repo`, as GitHub spells it.
-pub const REPO: &str = "EricMarcantonio/duet";
 /// GitHub's "latest release" endpoint (unauthenticated, 60 requests an hour).
 pub const API_URL: &str = "https://api.github.com/repos/EricMarcantonio/duet/releases/latest";
-/// Where "Download" sends people when the release payload has no page URL.
-pub const RELEASES_PAGE: &str = "https://github.com/EricMarcantonio/duet/releases/latest";
 /// The command a Homebrew install should run instead of downloading a zip.
 pub const BREW_UPGRADE: &str = "brew upgrade --cask duet";
 /// How long `curl` may take before the check gives up. Also keeps the footer
@@ -223,6 +219,22 @@ mod tests {
         assert!(!is_newer("v0.2.0", "0.2.0"));
         assert!(!is_newer("v0.1.9", "0.2.0"));
         assert!(!is_newer("nonsense", "0.2.0"));
+    }
+
+    /// A running version the parser rejects — a local prerelease build such as
+    /// `0.4.0-beta.1` — cannot be compared against anything, so every check
+    /// reports *up to date*, even when a strictly newer release exists. Pinned
+    /// because the alternative reading ("unparsable, so prompt") would offer a
+    /// downgrade on every check instead.
+    #[test]
+    fn an_unparsable_current_version_reports_up_to_date() {
+        assert_eq!(parse_version("0.4.0-beta.1"), None);
+        assert!(!is_newer("v0.4.0", "0.4.0-beta.1"));
+        assert!(!is_newer("v0.4.1", "0.4.0-beta.1"));
+        assert_eq!(
+            state_for("v0.4.1", "u", "0.4.0-beta.1", InstallKind::Direct),
+            UpdateState::UpToDate
+        );
     }
 
     #[test]

@@ -595,18 +595,38 @@ svg { display: block; width: 100%; height: 100%; }
 .picker-empty, .picker-note { padding: 10px 4px 2px; font-size: 11.5px; color: var(--text-2); }
 
 /* ---- Footer ------------------------------------------------------------- */
+/* Left: version. Right: Quit. Middle: the update check, which is the only part
+   that can grow (a brew command is long), so it owns all the squeeze. */
 .footer {
   display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
   margin: 16px 4px 4px; padding-top: 10px;
   border-top: 0.5px solid var(--card-border);
   font-size: 11px; color: var(--text-3);
 }
 .link.quiet { color: var(--text-2); font-size: 11.5px; }
 .link.quiet:hover { color: var(--text); }
-/* Update check: text, an optional brew command, and a Download link in one row. */
-.footer .update { display: inline-flex; align-items: center; gap: 8px; }
+.footer .version { flex: none; white-space: nowrap; }
+.footer > .link { flex: none; }
+/* Update check: the availability text, an optional brew command, and a Download
+   link — ~290px on one line, which cannot fit beside the version and Quit in a
+   400px popover (368px of row) or a 360px window (328px). So the cell takes only
+   the room the footer gives it and wraps; at those two widths the command ends up
+   on a line of its own. */
+.footer .update {
+  display: inline-flex; align-items: center; flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+}
 .footer .update .brew-command {
+  /* Laid out after Download, so the wrap reads "0.3.0 available  Download" then
+     the command on its own line — the DOM order (text, command, link) is what a
+     screen reader wants, and the command is not focusable. */
+  order: 1;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 10.5px; color: var(--text-2);
+  /* Below ~152px even its own line is too narrow: ellipsize, never clip. */
+  min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   -webkit-user-select: text; user-select: text;
 }
