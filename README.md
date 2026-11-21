@@ -16,18 +16,6 @@ builds), works fully offline, and is a single small Rust app.
 
 **Homepage:** <https://ericmarcantonio.github.io/duet/> (Rust + WebAssembly, in [`site/`](site/)).
 
-## Demo
-
-<p align="center">
-  <a href="docs/demo.mp4">
-    <img src="docs/demo.gif" alt="Two pairs of headphones listening together in Duet, each pair with its own volume slider and battery level" width="640">
-  </a>
-</p>
-
-Two pairs of headphones sharing this computer's audio, each pair with its own volume
-slider — [open the full-resolution MP4](docs/demo.mp4) for the clean picture (the GIF
-above is 640 px and tape-graded).
-
 ## Install
 
 ### Homebrew (cask)
@@ -167,8 +155,9 @@ DUET_WINDOWED=1 cargo run        # normal window instead of the menu bar popover
 cargo run --example probe        # print output devices + paired Bluetooth devices
 ```
 
-`scripts/demo-vhs.sh` and the `docs/demo.*` files it writes land with the demo capture
-commit; the `## Demo` block above starts rendering once they do.
+`scripts/demo-vhs.sh` produces the README demo: it drives the real mock build with
+`cliclick`, captures the window with ffmpeg and grades it into `docs/demo.gif` and
+`docs/demo.mp4` (needs Screen Recording + Accessibility permission, ~35 seconds).
 
 Code layout: `src/audio/` (shared model + per-OS backends + mocks), `src/ui/` (Dioxus
 components, tray, pure logic in `logic.rs`), `src/update.rs` (release comparison, the only
