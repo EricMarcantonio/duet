@@ -5,6 +5,7 @@ use super::logic::*;
 use super::{Backends, WindowMode};
 use crate::audio::{BluetoothDevice, DeviceId, HeadphoneInfo, ListeningMode, OutputDevice};
 use crate::config::Config;
+use crate::update::UpdateState;
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 use std::collections::HashMap;
@@ -65,6 +66,8 @@ pub struct AppState {
     /// Noise control / battery per Bluetooth address (connected devices only).
     pub headphones: Signal<HashMap<String, HeadphoneInfo>>,
     pub pending_modes: Signal<PendingModes>,
+    /// Last update-check result, or `None` until the user asks for one.
+    pub update: Signal<Option<UpdateState>>,
 }
 
 impl AppState {
@@ -92,6 +95,7 @@ impl AppState {
             panel_moved: Signal::new(false),
             headphones: Signal::new(HashMap::new()),
             pending_modes: Signal::new(PendingModes::default()),
+            update: Signal::new(None),
         }
     }
 
@@ -593,6 +597,31 @@ fn quit_app() {
     std::process::exit(0)
 }
 
+/// Ask GitHub for the latest release and put the answer in the footer.
+///
+/// The fetch is `curl`, so it runs on a blocking thread inside `spawn_forever`:
+/// the UI thread only ever sets `Checking` and later the result. Re-entry is
+/// ignored while a check is in flight, and every failure lands in the footer
+/// cell plus the log — never a toast or a dialog.
+pub fn check_for_updates(mut state: AppState) {
+    if matches!(state.update.peek().as_ref(), Some(UpdateState::Checking)) {
+        return;
+    }
+    state.update.set(Some(UpdateState::Checking));
+    spawn_forever(async move {
+        let current = env!("CARGO_PKG_VERSION");
+        let kind = crate::update::install_kind(&crate::update::caskroom_candidates());
+        // `blocking` returns `Result<Result<String, String>, String>`: a panicked
+        // or cancelled worker is just another failed check.
+        let fetched = blocking(crate::update::fetch_latest)
+            .await
+            .unwrap_or_else(Err);
+        let next = crate::update::outcome(fetched, current, kind);
+        crate::dlog!("update check: {next:?}");
+        state.update.set(Some(next));
+    });
+}
+
 fn hide_window() {
     dioxus::desktop::window().window.set_visible(false);
 }
@@ -664,6 +693,7 @@ pub fn App() -> Element {
                     OtherOutputs {}
                     footer { class: "footer",
                         span { class: "version", "Duet {env!(\"CARGO_PKG_VERSION\")}" }
+                        UpdateCheck {}
                         button { class: "link quiet", onclick: move |_| quit_app(), "Quit Duet" }
                     }
                 } else {
@@ -672,6 +702,55 @@ pub fn App() -> Element {
             }
             ToastView {}
         }
+    }
+}
+
+/// The footer's middle cell: the update check, in whatever state it is in.
+///
+/// Nothing polls — the button is the only trigger — and no state opens a toast
+/// or a dialog: a failed check stays in this cell (with the reason in the
+/// tooltip) and is retryable. A Homebrew install is shown the command to run
+/// rather than only a zip it would have to unpack by hand.
+#[component]
+fn UpdateCheck() -> Element {
+    let state = use_context::<AppState>();
+    let update = state.update.read().clone();
+    let inner: Element = match update {
+        None => rsx! {
+            button {
+                class: "link quiet",
+                onclick: move |_| check_for_updates(state),
+                "Check for updates"
+            }
+        },
+        Some(UpdateState::Checking) => rsx! { "Checking…" },
+        Some(UpdateState::UpToDate) => rsx! { "Up to date" },
+        Some(UpdateState::Failed(detail)) => rsx! {
+            button {
+                class: "link quiet",
+                title: "{detail}",
+                onclick: move |_| check_for_updates(state),
+                "Couldn't check"
+            }
+        },
+        Some(UpdateState::Available { version, url, brew }) => rsx! {
+            "{version} available"
+            if brew {
+                span { class: "brew-command", "{crate::update::BREW_UPGRADE}" }
+            }
+            button {
+                class: "link",
+                onclick: move |_| {
+                    if let Err(e) = crate::ui::platform::open_url(&url) {
+                        crate::dlog!("open release page: {e}");
+                    }
+                },
+                "Download"
+            }
+        },
+    };
+    rsx! {
+        span { class: "update", {inner} }
     }
 }
 
