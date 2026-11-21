@@ -121,8 +121,8 @@ Y_DONE=211            # picker header "Done" link once the hero is two lines
 # Timing — the performance is ~15 s: short enough for a small GIF, long enough to
 # read each beat. These are the only knobs for pacing.
 # ---------------------------------------------------------------------------
-T_START=2.6      # let the window paint after the capture starts
-T_OPEN=1.8       # pre-roll click: "Choose headphones"; the picker drops in
+T_START=0.8      # the window is already up (pre-roll), just settle the recorder
+T_OPEN=0         # unused: the picker is opened in the pre-roll, before recording
 T_CONNECTING=2.4 # hold on the row's "Connecting…" spinner (mock connect is 2 s)
 T_CONNECT=2.6    # the pair lands Connected and the rows shift up
 T_TOGETHER=3.2   # "Listen together": the Duet output is created, cards slide in
@@ -417,10 +417,22 @@ if [[ -n "${DEMO_FORCE_DRAWTEXT:-}" && "${DEMO_FORCE_DRAWTEXT}" != "0" ]]; then
     FORCE_DRAWTEXT=1
 fi
 
+# The grade. `clean` (default) shows the panel as it is; a retro tape look reads
+# as a joke on a macOS menu bar utility, so the flavour is opt-in via DEMO_LOOK.
+LOOK="${DEMO_LOOK:-clean}"
+case "$LOOK" in
+    clean | subtle | vhs) ;;
+    *) die "DEMO_LOOK must be clean, subtle or vhs (got: $LOOK)" ;;
+esac
+note "ok: look: $LOOK"
+
 have_drawtext() { ffmpeg -hide_banner -filters 2>/dev/null | grep -qw drawtext; }
 have_pillow() { python3 -c 'import PIL.Image, PIL.ImageDraw, PIL.ImageFont' >/dev/null 2>&1; }
 
-if [[ -n "${DEMO_ALLOW_NO_BADGE:-}" && "${DEMO_ALLOW_NO_BADGE}" != "0" ]]; then
+if [[ "$LOOK" == "clean" ]]; then
+    OVERLAY="none"
+    note "ok: overlay path: none (clean look: no PLAY badge, no timecode)"
+elif [[ -n "${DEMO_ALLOW_NO_BADGE:-}" && "${DEMO_ALLOW_NO_BADGE}" != "0" ]]; then
     OVERLAY="none"
     note "ok: overlay path: none (DEMO_ALLOW_NO_BADGE is set, no PLAY badge/timecode)"
 else
@@ -545,13 +557,31 @@ osascript_sys_events() { # inner AppleScript run against `process "<APP_NAME>"`
     run osascript -e "tell application \"System Events\" to tell process \"$APP_NAME\" to $1"
 }
 
+# Bring the mock window forward and prove it: while another app is frontmost,
+# cliclick's clicks are delivered to that app and the take silently records a
+# greyed-out window. `set frontmost` alone is not enough.
+focus_window() {
+    local i front
+    for i in 1 2 3 4 5; do
+        run cliclick "c:$(abs_x 20),$(abs_y 10)" # title bar, no control there
+        pause 0.4
+        if ((DRY_RUN)); then return 0; fi
+        # AXFrontmost is a process attribute; asking window 1 for it silently errors.
+        front="$(osascript -e 'tell application "System Events" to tell (first process whose name is "duet") to return value of attribute "AXFrontmost"' 2>/dev/null)"
+        if [[ "$front" == "true" ]]; then
+            note "ok: the window is frontmost"
+            pause 0.5
+            return 0
+        fi
+    done
+    die "the Duet window never came to the front — another app keeps stealing focus (close or move it, then re-run)"
+}
+
 perform() {
     say "Performance (~${PERFORM}s)"
-    # The picker opens in the pre-roll: with it open the panel fills the window,
-    # so the take never shows the empty bottom half the mock has when idle.
+    # The picker is already open (pre-roll), so the panel fills the window from
+    # the first frame.
     pause "$T_START"
-    click "$X_CTA" "$Y_CTA_OPEN_PICKER"
-    pause "$T_OPEN"
 
     # 1. tick the pair that is not connected: the row shows "Connecting…" and the
     #    hero's CTA goes disabled — the state this project just learned to cancel.
@@ -626,12 +656,27 @@ build_grade_filter() {
     fi
     parts+=("scale=${MP4_W}:-2:flags=lanczos")              # fixed size, even height
     parts+=("fps=${FPS}")
-    parts+=("eq=contrast=1.07:brightness=-0.02:saturation=0.72:gamma=1.02") # mild desat + contrast
-    parts+=("rgbashift=rh=2:bh=-2")                         # red/blue displaced: tape bleed
-    parts+=("chromashift=cbh=-3:crh=3")                     # chroma lags luma: VHS smear
-    parts+=("noise=alls=12:allf=t+u")                       # grain, temporal + uniform
-    parts+=("drawgrid=w=iw:h=2:t=1:c=black@0.10")           # scanlines every 2 px
-    parts+=("vignette=angle=PI/5")                          # dark CRT corners
+    # A retro tape grade reads as a joke on a macOS menu bar utility, so the
+    # default is clean and the flavour is opt-in.
+    #   clean  (default) - the panel as it appears, nothing added
+    #   subtle          - a whisper of grain and vignette, no chroma bleed
+    #   vhs             - the full tape treatment (bleed, scanlines, timecode)
+    case "$LOOK" in
+        vhs)
+            parts+=("eq=contrast=1.07:brightness=-0.02:saturation=0.72:gamma=1.02")
+            parts+=("rgbashift=rh=2:bh=-2")                 # red/blue displaced: tape bleed
+            parts+=("chromashift=cbh=-3:crh=3")             # chroma lags luma: VHS smear
+            parts+=("noise=alls=12:allf=t+u")               # grain, temporal + uniform
+            parts+=("drawgrid=w=iw:h=2:t=1:c=black@0.10")   # scanlines every 2 px
+            parts+=("vignette=angle=PI/5")                  # dark CRT corners
+            ;;
+        subtle)
+            parts+=("noise=alls=4:allf=t")                  # almost invisible grain
+            parts+=("vignette=angle=PI/9")                  # gentle corner falloff
+            ;;
+        *)
+            ;;                                              # clean: nothing added
+    esac
     if [[ "$OVERLAY" == "drawtext" ]]; then
         # Text last, so the grain and the scanlines never sit on top of it.
         parts+=("drawtext=fontfile='${FONT_PATH}':text='PLAY ▶':fontcolor=white@0.85:fontsize=22:x=${BADGE_X}:y=${BADGE_Y}:shadowcolor=black@0.55:shadowx=2:shadowy=2")
@@ -868,6 +913,29 @@ osascript_sys_events "set frontmost to true"
 osascript_sys_events "set position of window 1 to {$WX, $WY}"
 osascript_sys_events "set size of window 1 to {$WIN_W, $WIN_H}"
 pause 1.0
+
+# Read the geometry back: `set position` can be ignored before the window is laid
+# out, and the crop then records whatever sits at that rect - a wasted take
+# captured the user's video player instead of Duet.
+actual_pos="$(osascript -e 'tell application "System Events" to tell (first process whose name is "duet") to return position of window 1' 2>/dev/null)"
+actual_size="$(osascript -e 'tell application "System Events" to tell (first process whose name is "duet") to return size of window 1' 2>/dev/null)"
+if ((!DRY_RUN)); then
+    note "window reads back at ${actual_pos:-?} size ${actual_size:-?} (wanted {$WX, $WY} ${WIN_W}x${WIN_H})"
+    [[ "$actual_pos" == "$WX, $WY" ]] ||
+        die "the Duet window is not at {$WX, $WY} (it reports ${actual_pos:-nothing}) - the crop would record a different window. Re-run, or pass DEMO_WIN_X/DEMO_WIN_Y to place it where the window actually is."
+    [[ "$actual_size" == "$WIN_W, $WIN_H" ]] ||
+        note "WARN: size is ${actual_size:-unknown}, wanted ${WIN_W}x${WIN_H}; the crop will be off"
+fi
+
+say "Focus"
+focus_window
+
+# Pre-roll: open the picker before the recorder starts, so the first frame is the
+# populated panel instead of the idle window with its empty bottom half.
+if ((!DRY_RUN)); then
+    click "$X_CTA" "$Y_CTA_OPEN_PICKER"
+    pause 1.2
+fi
 
 # The capture starts first and stops itself at $TOTAL; the performance plays into
 # it. Doing it in that order means the recorder never has to be signalled.
