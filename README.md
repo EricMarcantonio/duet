@@ -20,13 +20,14 @@ builds), works fully offline, and is a single small Rust app.
 
 <p align="center">
   <a href="docs/demo.mp4">
-    <img src="docs/demo.gif" alt="Duet's panel: picking two pairs of headphones, connecting one, and listening together with a separate volume for each pair" width="640">
+    <img src="docs/demo.gif" alt="Duet's panel: two pairs of headphones ticked, one showing Connecting, then both playing through the Duet output with 74% and 60% volume" width="640">
   </a>
 </p>
 
-One pair is ticked and connects, then both play through the single **Duet** output — with
-74 % on one pair and 60 % on the other. [Open the MP4](docs/demo.mp4) for the clean picture;
-the GIF is 640 px and tape-graded.
+A second pair is ticked and connects (the row shows **Connecting…**), then both play through
+the single **Duet** output with their own volumes — 74 % and 60 %. The capture is the real
+app in its mock mode, recorded by [`scripts/demo-vhs.sh`](scripts/demo-vhs.sh); the GIF is
+640 px, the [MP4](docs/demo.mp4) is the sharp copy.
 
 ## Install
 
@@ -177,8 +178,10 @@ cargo run --example probe        # print output devices + paired Bluetooth devic
 ```
 
 `scripts/demo-vhs.sh` produces the README demo: it drives the real mock build with
-`cliclick`, captures the window with ffmpeg and grades it into `docs/demo.gif` and
-`docs/demo.mp4` (needs Screen Recording + Accessibility permission, ~35 seconds).
+`cliclick`, records the Duet window itself with `screencapture -l` and writes `docs/demo.gif`
+and `docs/demo.mp4` (~20 seconds; needs Screen Recording + Accessibility permission, and the
+window must be on the visible desktop). `DEMO_LOOK=vhs` brings back the tape grade, and
+`DEMO_DRY_RUN=1` prints every command it would run.
 
 Code layout: `src/audio/` (shared model + per-OS backends + mocks), `src/ui/` (Dioxus
 components, tray, pure logic in `logic.rs`), `src/update.rs` (release comparison, the only
