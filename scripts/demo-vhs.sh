@@ -575,20 +575,25 @@ osascript_sys_events() { # inner AppleScript run against `process "<APP_NAME>"`
 # cliclick's clicks are delivered to that app and the take silently records a
 # greyed-out window. `set frontmost` alone is not enough.
 focus_window() {
-    local i front
+    local i main
     for i in 1 2 3 4 5; do
-        run cliclick "c:$(abs_x 20),$(abs_y 10)" # title bar, no control there
-        pause 0.4
+        # AXFrontmost (app-level) can be true while the window is buried under
+        # another app, and then every click goes to that app while the take shows
+        # a perfectly good — but frozen — window. Raise the window itself, click
+        # inside its card (harmless empty area), and require AXMain (key window).
+        osascript -e 'tell application "System Events" to tell (first process whose name is "duet") to perform action "AXRaise" of window 1' >/dev/null 2>&1 || true
+        osascript -e 'tell application "System Events" to tell (first process whose name is "duet") to set frontmost to true' >/dev/null 2>&1 || true
+        run cliclick "c:$(abs_x "$X_CTA"),$(abs_y 100)" # inside the hero card, no control
+        pause 0.5
         if ((DRY_RUN)); then return 0; fi
-        # AXFrontmost is a process attribute; asking window 1 for it silently errors.
-        front="$(osascript -e 'tell application "System Events" to tell (first process whose name is "duet") to return value of attribute "AXFrontmost"' 2>/dev/null)"
-        if [[ "$front" == "true" ]]; then
-            note "ok: the window is frontmost"
+        main="$(osascript -e 'tell application "System Events" to tell (first process whose name is "duet") to return value of attribute "AXMain" of window 1' 2>/dev/null)"
+        if [[ "$main" == "true" ]]; then
+            note "ok: the window is key (AXMain)"
             pause 0.5
             return 0
         fi
     done
-    die "the Duet window never came to the front — another app keeps stealing focus (close or move it, then re-run)"
+    die "the Duet window never became the key window — another app keeps it behind (bring a normal desktop to the front and re-run)"
 }
 
 perform() {
