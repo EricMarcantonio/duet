@@ -875,6 +875,24 @@ assert_under() { # file, limit bytes, published name, retune hint
     fi
 }
 
+# True when the frame carries Duet's accent blue (the primary button). Guards
+# against a take of some other app: luma alone cannot tell them apart.
+accent_present() {
+    local raw="$1" tmp
+    tmp="$(mktemp -d)"
+    ffmpeg -y -hide_banner -loglevel error -ss 3 -i "$raw" -frames:v 1 "$tmp/f.png" >/dev/null 2>&1 || return 0
+    python3 - "$tmp/f.png" <<'PYEOF'
+import sys
+from PIL import Image
+im = Image.open(sys.argv[1]).convert("RGB").resize((160, 240))
+hits = sum(1 for r, g, b in im.getdata() if b > 150 and b - r > 60 and g < b)
+sys.exit(0 if hits > 0.004 * 160 * 240 else 1)
+PYEOF
+    local rc=$?
+    rm -rf "$tmp"
+    return $rc
+}
+
 frame_stats() { # file, seek seconds -> "<YAVG> <YMAX>" for one frame
     # YAVG is limited-range luma, so pure black reads 16, not 0: the real panel
     # measures ~55 (dark mode) / ~220 (light mode) with a bright YMAX (~235),
@@ -985,6 +1003,13 @@ if ((!DRY_RUN)); then
     note "mid-capture frame: YAVG=${luma_avg:-?} YMAX=${luma_max:-?} (black is 16/16, the real panel ~55/235)"
     if ! awk -v a="${luma_avg:-0}" -v m="${luma_max:-0}" 'BEGIN { exit !(a + 0 >= 24 && m + 0 >= 100) }'; then
         die "the captured frame is essentially black — the screen is locked, or Screen Recording permission is missing (System Settings > Privacy & Security > Screen Recording: enable your terminal, then re-run)"
+    fi
+    # Not black is not enough: a capture of a *different* app (the Duet window sat
+    # on another Space, so the grab filmed whatever was on screen) passes the luma
+    # test and only shows up when someone watches the take. The panel's accent
+    # blue is the cheapest reliable signature.
+    if ! accent_present "$RAW_FILE"; then
+        die "the recording does not contain Duet's accent colour — the capture filmed another app. Put the Duet space in front (leave full-screen apps) and re-run; nothing was written."
     fi
 fi
 
