@@ -53,6 +53,33 @@ Keep `Casks/d/duet.rb` byte-identical to `packaging/homebrew/duet.rb`, and
 re-run `scripts/update-cask.sh` on every release so a rebuilt or clobbered
 release zip cannot leave the tap with a stale digest.
 
+## What core submission actually requires
+
+Checked against <https://docs.brew.sh/Package-Acceptance-Policy> and
+<https://docs.brew.sh/Acceptable-Casks>. Four separate bars, and Duet currently
+clears none of the first three:
+
+1. **Gatekeeper.** A cask for macOS must "pass Homebrew's Gatekeeper checks and
+   must not require System Integrity Protection or Gatekeeper to be disabled or
+   bypassed". Duet is ad-hoc signed and un-notarized, so its own caveats tell
+   people to right-click › Open. **A Developer ID certificate, `codesign` with a
+   hardened runtime, `notarytool` submission and a stapled ticket are the
+   prerequisite** — `scripts/bundle-macos.sh` already honours `SIGN_IDENTITY`
+   and `NOTARY_PROFILE` for exactly this.
+2. **Notability, self-submission tier.** The owner submitting their own repo
+   needs **225 stars, or 90 forks, or 90 watchers** (the 75/30/30 tier is for
+   third-party submissions). Duet has 0/0/0. The repository must also be at
+   least 30 days old.
+3. **A free token.** Homebrew's core tap already ships `duet` (Duet Display), and
+   "the existing or more widely recognised application normally keeps the
+   unprefixed token", so a submission needs a distinct name, e.g.
+   `duet-audio` — with `name "Duet Audio"` or similar so search stays honest.
+4. **Mechanics.** Working `livecheck` (this file has one: `strategy
+   :github_latest`), a versioned upstream URL, `zap` stanzas, `brew audit --cask
+   --new <token>` clean, `brew style` clean, then a PR to `homebrew/homebrew-cask`
+   with its template. The tap stays the distribution channel until all of this
+   lands.
+
 ## Notability: homebrew/homebrew-cask
 
 Submitting to the core tap (`homebrew/homebrew-cask`) is a later step. Core

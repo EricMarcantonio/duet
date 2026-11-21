@@ -183,6 +183,11 @@ and `docs/demo.mp4` (~20 seconds; needs Screen Recording + Accessibility permiss
 window must be on the visible desktop). `DEMO_LOOK=vhs` brings back the tape grade, and
 `DEMO_DRY_RUN=1` prints every command it would run.
 
+Commits on `main` must be signed: the repository enforces
+`required_signatures` (Settings › Rules), so a branch or tag you push with
+`git commit -S` / a configured signing key is the only kind that lands. Set it up
+once with `git config commit.gpgsign true` and `git config tag.gpgsign true`.
+
 Code layout: `src/audio/` (shared model + per-OS backends + mocks), `src/ui/` (Dioxus
 components, tray, pure logic in `logic.rs`), `src/update.rs` (release comparison, the only
 network call), `src/config.rs`, `assets/main.css`.
