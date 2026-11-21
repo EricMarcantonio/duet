@@ -1,6 +1,6 @@
 cask "duet" do
   version "0.3.0"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256 "60ae70f95a2de4aa7357d8b2871024626cb69b9ee3fff24d72be9fa24721605c"
 
   url "https://github.com/EricMarcantonio/duet/releases/download/v#{version}/Duet-macOS.zip",
       verified: "github.com/EricMarcantonio/duet/"
