@@ -7,6 +7,9 @@
 //! * `DUET_MOCK=flaky`   – like `1`, but every Bluetooth connect fails.
 //! * `DUET_MOCK=hint`    – both connected, battery readable, noise control not
 //!   switchable (current macOS), so the cards point at Control Center.
+//!
+//! On macOS every variant except `full` is read-only for noise control, because
+//! the real backend is: Apple keeps that channel and Duet only shows the hint.
 
 use super::Backends;
 use crate::audio::mock::{MockAudio, MockBluetooth};
@@ -101,9 +104,13 @@ pub fn mock_backends(variant: &str) -> Backends {
         }
     }
     // `hint` mirrors current macOS: both pairs connected, battery readable,
-    // noise control only switchable in Control Center.
+    // noise control only switchable in Control Center. Every variant mirrors the
+    // platform it runs on for the same reason: on macOS the system keeps the
+    // noise-control channel, so the mock must not draw buttons that would do
+    // nothing there. `DUET_MOCK=full` forces the switchable path, which is how
+    // the switcher's UI still gets exercised on a Mac.
     let mut bt = MockBluetooth::sample();
-    bt.read_only = variant == "hint";
+    bt.read_only = variant == "hint" || (cfg!(target_os = "macos") && variant != "full");
     if matches!(variant, "full" | "new" | "hint") {
         bt.connect("02-1B-2C-3D-4E-5F").ok();
     }

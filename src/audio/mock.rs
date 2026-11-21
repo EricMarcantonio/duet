@@ -218,10 +218,45 @@ impl BluetoothBackend for MockBluetooth {
         }))
     }
     fn set_listening_mode(&self, address: &str, mode: ListeningMode) -> Result<()> {
+        if self.read_only {
+            return Err(AudioError::Bluetooth(
+                "noise control is only switchable in Control Center".into(),
+            ));
+        }
         self.modes
             .lock()
             .unwrap()
             .insert(normalize_address(address), mode);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ADDR: &str = "02-2A-3B-4C-5D-6E";
+
+    #[test]
+    fn a_read_only_mock_refuses_to_switch_and_still_reports_battery() {
+        let mut bt = MockBluetooth::sample();
+        bt.read_only = true;
+        assert!(
+            bt.set_listening_mode(ADDR, ListeningMode::Transparency)
+                .is_err()
+        );
+        let info = bt.headphone_info(ADDR).unwrap().unwrap();
+        assert!(info.supported_modes.is_empty());
+        assert!(info.listening_mode.is_none());
+        assert!(!info.battery.is_empty(), "battery must stay readable");
+    }
+
+    #[test]
+    fn a_writable_mock_switches_and_reports_the_new_mode() {
+        let bt = MockBluetooth::sample();
+        bt.set_listening_mode(ADDR, ListeningMode::Transparency)
+            .unwrap();
+        let info = bt.headphone_info(ADDR).unwrap().unwrap();
+        assert_eq!(info.listening_mode, Some(ListeningMode::Transparency));
     }
 }
