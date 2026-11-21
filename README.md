@@ -1,5 +1,12 @@
 # Duet
 
+[![CI](https://img.shields.io/github/actions/workflow/status/EricMarcantonio/duet/ci.yml?branch=main&label=CI)](https://github.com/EricMarcantonio/duet/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/EricMarcantonio/duet)](https://github.com/EricMarcantonio/duet/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/EricMarcantonio/duet/total?label=downloads)](https://github.com/EricMarcantonio/duet/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+![macOS 11+](https://img.shields.io/badge/macOS-11%2B-lightgrey)
+![platforms: macOS · Windows · Linux](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-lightgrey)
+
 **Two pairs of headphones, one computer, separate volumes.**
 
 Duet plays your computer's audio on two pairs of AirPods (or any Bluetooth headphones)
@@ -9,23 +16,49 @@ builds), works fully offline, and is a single small Rust app.
 
 **Homepage:** <https://ericmarcantonio.github.io/duet/> (Rust + WebAssembly, in [`site/`](site/)).
 
+## Demo
+
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
-    <img src="docs/screenshot-light.png" alt="The Duet panel with two listeners, each with its own volume slider and battery levels" width="360">
-  </picture>
+  <a href="docs/demo.mp4">
+    <img src="docs/demo.gif" alt="Two pairs of headphones listening together in Duet, each pair with its own volume slider and battery level" width="640">
+  </a>
 </p>
 
-## Download
+Two pairs of headphones sharing this computer's audio, each pair with its own volume
+slider — [open the full-resolution MP4](docs/demo.mp4) for the clean picture (the GIF
+above is 640 px and tape-graded).
 
-- **macOS 11+** (Apple Silicon & Intel): [Duet-macOS.zip](https://github.com/EricMarcantonio/duet/releases/latest/download/Duet-macOS.zip)
-- Windows 10/11, experimental: [Duet-Windows.zip](https://github.com/EricMarcantonio/duet/releases/latest/download/Duet-Windows.zip)
-- Linux, experimental: [Duet-Linux.tar.gz](https://github.com/EricMarcantonio/duet/releases/latest/download/Duet-Linux.tar.gz)
+## Install
 
-The macOS app isn't notarized, so the first launch needs right-click › Open (or System
+### Homebrew (cask)
+
+```sh
+brew install --cask EricMarcantonio/duet/duet
+```
+
+The cask lives in [`packaging/homebrew/duet.rb`](packaging/homebrew/duet.rb), but **the tap is
+not published yet**, so this command fails today;
+[`packaging/homebrew/README.md`](packaging/homebrew/README.md) has the three steps that publish
+it. Use the tap-qualified name above: Homebrew's core `homebrew-cask`
+already ships a cask called `duet` (Duet Display, the iPad-as-a-second-screen tool), so a
+bare `brew install --cask duet` installs that app, not this one.
+
+### macOS 11+ (Apple Silicon & Intel)
+
+[Duet-macOS.zip](https://github.com/EricMarcantonio/duet/releases/latest/download/Duet-macOS.zip)
+
+The app isn't notarized, so the first launch needs right-click › Open (or System
 Settings › Privacy & Security › Open Anyway). All builds: [Releases](https://github.com/EricMarcantonio/duet/releases).
 
-## Build from source (macOS)
+### Windows / Linux (experimental)
+
+- Windows 10/11: [Duet-Windows.zip](https://github.com/EricMarcantonio/duet/releases/latest/download/Duet-Windows.zip)
+- Linux: [Duet-Linux.tar.gz](https://github.com/EricMarcantonio/duet/releases/latest/download/Duet-Linux.tar.gz)
+
+These builds compile in CI and run the same unit tests there, but have **not been run on
+real hardware yet** — see [Status](#status).
+
+### From source (macOS)
 
 ```sh
 ./scripts/bundle-macos.sh --install   # universal (Apple Silicon + Intel), copies to ~/Applications
@@ -42,6 +75,13 @@ go to System Settings › Privacy & Security › Bluetooth. To start Duet at log
 in System Settings › General › Login Items.
 
 ## Use
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
+    <img src="docs/screenshot-light.png" alt="The Duet panel with two listeners, each with its own volume slider and battery levels" width="360">
+  </picture>
+</p>
 
 - **Click the menu bar headphones icon** to show or hide the panel (Quit is at the bottom of the panel; on Linux the tray menu has Open Duet / Quit).
   Drag its header to move it; close it with × or Esc. Opening Duet.app again also shows it.
@@ -62,6 +102,10 @@ in System Settings › General › Login Items.
   "Noise control: Control Center › Sound" and you switch Off / Transparency / Adaptive /
   Noise Cancellation there. Windows exposes no API for it at all.
 - **Other outputs** lets you go back to just the speakers or one pair.
+- **Check for updates** in the panel footer asks GitHub for the latest release and says either
+  *Up to date* or *0.3.0 available* — with a download link, or with the `brew upgrade --cask duet`
+  command to run when Duet came from the cask. Nothing polls; the link is the only trigger, and a
+  failed check stays in the footer as *Couldn't check* (hover for the reason).
 
 While listening together Duet also moves the default **microphone** off the AirPods to the
 built-in mic: an AirPods mic forces call-quality mode, which keeps knocking that pair out of the
@@ -98,6 +142,18 @@ hardware yet**. Linux needs `pactl` (with `pipewire-pulse` on PipeWire systems),
 and the WebKitGTK/GTK + libayatana-appindicator dev packages to build. Build those with
 `dx bundle --release --platform desktop` on the target OS.
 
+## Status
+
+- **macOS 11+** — developed and tested on real hardware: menu bar panel, CoreAudio
+  Multi-Output, IOBluetooth, AirPods battery levels.
+- **Windows 10/11** — experimental: compiles in CI and has unit tests for the audio-mirror and
+  Bluetooth code; never run on real hardware.
+- **Linux** — experimental: compiles in CI and has unit tests for the PulseAudio and AAP code;
+  never run on real hardware.
+
+The badges above report the CI workflow and the latest release, not hardware verification —
+CI builds all three platforms but runs the test suite on macOS only.
+
 ## Develop
 
 ```sh
@@ -105,17 +161,24 @@ cargo test                       # unit + live CoreAudio tests (read-only except
 cargo test -- --ignored          # also create/destroy a temp multi-output and switch outputs (restored)
 DUET_MOCK=1 cargo run            # fake devices; variants: full, new, hint, nomulti, flaky
 swift scripts/make-icon.swift    # regenerate assets/icon/* (app icon, .icns, .ico)
+scripts/demo-vhs.sh              # re-record the README demo (ffmpeg + cliclick) → docs/demo.gif, docs/demo.mp4
+scripts/update-cask.sh v0.3.0    # re-pin packaging/homebrew/duet.rb to a released tag
 DUET_WINDOWED=1 cargo run        # normal window instead of the menu bar popover
 cargo run --example probe        # print output devices + paired Bluetooth devices
 ```
 
+`scripts/demo-vhs.sh` and the `docs/demo.*` files it writes land with the demo capture
+commit; the `## Demo` block above starts rendering once they do.
+
 Code layout: `src/audio/` (shared model + per-OS backends + mocks), `src/ui/` (Dioxus
-components, tray, pure logic in `logic.rs`), `src/config.rs`, `assets/main.css`.
+components, tray, pure logic in `logic.rs`), `src/update.rs` (release comparison, the only
+network call), `src/config.rs`, `assets/main.css`.
 The homepage is a separate Dioxus web (WebAssembly) crate in [`site/`](site/README.md).
 
 Releases: pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the macOS
 universal app, Windows and Linux, and attaches `Duet-macOS.zip`, `Duet-Windows.zip` and
-`Duet-Linux.tar.gz` to the GitHub release.
+`Duet-Linux.tar.gz` to the GitHub release. Afterwards run `scripts/update-cask.sh vX.Y.Z` so
+the cask in `packaging/homebrew/` points at the new artifact's digest.
 
 ## License
 
