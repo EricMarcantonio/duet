@@ -1,12 +1,14 @@
 //! Update checks: the decisions, with no I/O.
 //!
-//! Nothing in this module touches the network, the disk or a process, so every
-//! rule about "is there a newer release?" is unit-testable: version parsing,
-//! release-payload parsing, and the mapping from those to a footer state. The
-//! one place that shells out (`curl`) is added by a later task; the UI keeps it
-//! off the render path.
+//! Almost nothing in this module touches the network, the disk or a process, so
+//! every rule about "is there a newer release?" is unit-testable: version
+//! parsing, release-payload parsing, and the mapping from those to a footer
+//! state. The one piece of real I/O is [`fetch_latest`], a single `curl` call
+//! the UI runs off the render path (spawned onto a blocking thread, never
+//! awaited on the UI thread, bounded by `--max-time`).
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// `owner/repo`, as GitHub spells it.
 pub const REPO: &str = "EricMarcantonio/duet";
@@ -16,6 +18,9 @@ pub const API_URL: &str = "https://api.github.com/repos/EricMarcantonio/duet/rel
 pub const RELEASES_PAGE: &str = "https://github.com/EricMarcantonio/duet/releases/latest";
 /// The command a Homebrew install should run instead of downloading a zip.
 pub const BREW_UPGRADE: &str = "brew upgrade --cask duet";
+/// How long `curl` may take before the check gives up. Also keeps the footer
+/// from saying "Checking…" for longer than a user would wait.
+pub const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How this copy of Duet got onto the machine, which decides how it updates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +143,67 @@ pub fn state_for(tag: &str, url: &str, current: &str, kind: InstallKind) -> Upda
     }
 }
 
+/// Ask GitHub for the latest release, with curl's own timeout as the only
+/// bound on how long that takes.
+///
+/// Never called on the UI thread: see `ui::app::check_for_updates`.
+pub fn fetch_latest() -> Result<String, String> {
+    fetch_latest_in(
+        &std::env::var("PATH").unwrap_or_default(),
+        Some(FETCH_TIMEOUT),
+    )
+}
+
+/// [`fetch_latest`] with an injectable search path, so a machine without curl
+/// can be simulated in a unit test (no network is touched either way).
+///
+/// A missing or unusable `curl` becomes an error string that names it, because
+/// the only reader is a log line and a tooltip.
+fn fetch_latest_in(path_env: &str, timeout: Option<Duration>) -> Result<String, String> {
+    let seconds = timeout
+        .unwrap_or(FETCH_TIMEOUT)
+        .as_secs()
+        .max(1)
+        .to_string();
+    let output = std::process::Command::new("curl")
+        .args([
+            "-sSL",
+            "--max-time",
+            seconds.as_str(),
+            "-H",
+            "User-Agent: duet",
+            API_URL,
+        ])
+        .env("PATH", path_env)
+        .output()
+        .map_err(|e| format!("couldn't run curl: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "curl exited with {}: {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+    String::from_utf8(output.stdout).map_err(|e| format!("curl printed non-UTF-8: {e}"))
+}
+
+/// Map one finished fetch onto the footer state.
+///
+/// Pure: the fetch's own failure is passed through verbatim, and a payload that
+/// isn't a release (a rate-limit message, a captive-portal page) is a failure —
+/// never "up to date", which would hide the problem.
+pub fn outcome(fetched: Result<String, String>, current: &str, kind: InstallKind) -> UpdateState {
+    let json = match fetched {
+        Ok(json) => json,
+        Err(e) => return UpdateState::Failed(e),
+    };
+    match parse_release(&json) {
+        Some((tag, url)) => state_for(&tag, &url, current, kind),
+        None => UpdateState::Failed("couldn't read the latest release".to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,6 +287,47 @@ mod tests {
         assert!(
             candidates.is_empty() || candidates.iter().all(|p| p.ends_with("duet")),
             "every candidate should be a `duet` cask directory: {candidates:?}"
+        );
+    }
+
+    /// No curl on the machine is a normal failure, not a panic, and the message
+    /// has to say what is missing or the log line is useless.
+    #[test]
+    fn a_missing_curl_fails_with_a_message_naming_it() {
+        let empty = std::env::temp_dir().join("duet-no-curl");
+        std::fs::create_dir_all(&empty).unwrap();
+        let err = fetch_latest_in(&empty.to_string_lossy(), None).unwrap_err();
+        assert!(err.contains("curl"), "unhelpful error: {err}");
+    }
+
+    #[test]
+    fn a_failed_fetch_becomes_the_failed_state() {
+        let s = outcome(Err("curl failed".into()), "0.2.0", InstallKind::Direct);
+        assert_eq!(s, UpdateState::Failed("curl failed".into()));
+    }
+
+    #[test]
+    fn a_successful_fetch_with_a_junk_payload_is_a_failure_too() {
+        let s = outcome(Ok("not json".into()), "0.2.0", InstallKind::Direct);
+        assert!(matches!(s, UpdateState::Failed(_)));
+    }
+
+    /// The shape GitHub actually returns (trimmed), so the end-to-end mapping is
+    /// pinned without a network call.
+    #[test]
+    fn a_real_release_payload_decides_the_footer_state() {
+        let payload = r#"{"url":"https://api.github.com/repos/EricMarcantonio/duet/releases/1","html_url":"https://github.com/EricMarcantonio/duet/releases/tag/v0.2.0","tag_name":"v0.2.0","prerelease":false,"draft":false,"body":"Notes"}"#;
+        assert_eq!(
+            outcome(Ok(payload.into()), "0.2.0", InstallKind::Direct),
+            UpdateState::UpToDate
+        );
+        assert_eq!(
+            outcome(Ok(payload.into()), "0.1.0", InstallKind::Brew),
+            UpdateState::Available {
+                version: "0.2.0".into(),
+                url: "https://github.com/EricMarcantonio/duet/releases/tag/v0.2.0".into(),
+                brew: true
+            }
         );
     }
 }
