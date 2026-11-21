@@ -20,14 +20,18 @@ builds), works fully offline, and is a single small Rust app.
 
 <p align="center">
   <a href="docs/demo.mp4">
-    <img src="docs/demo.gif" alt="Duet's panel: two pairs of headphones ticked, one showing Connecting, then both playing through the Duet output with 74% and 60% volume" width="640">
+    <img src="docs/demo.gif" alt="Duet's panel: two pairs of headphones ticked, one showing Connecting, then both playing through the Duet output with their own volumes" width="640">
   </a>
 </p>
 
 A second pair is ticked and connects (the row shows **Connecting…**), then both play through
-the single **Duet** output with their own volumes — 74 % and 60 %. The capture is the real
-app in its mock mode, recorded by [`scripts/demo-vhs.sh`](scripts/demo-vhs.sh); the GIF is
-640 px, the [MP4](docs/demo.mp4) is the sharp copy.
+the single **Duet** output with their own volumes — Alex's card is dragged to 74 %. The
+capture is the real app in its mock mode, recorded by [`scripts/demo-vhs.sh`](scripts/demo-vhs.sh):
+the window is captured at **1280 × 1920 px** (the app renders at 2× page zoom, so this is real
+detail, not an upscale) and shown here at half that size, with the window's rounded corners
+flattened onto the panel's own background. The [MP4](docs/demo.mp4) is the same take at full
+size. The cards say *Noise control: Control Center › Sound* because that is what macOS does —
+Duet only offers the switcher where the OS allows it (Linux); see [Status](#status).
 
 ## Install
 
@@ -178,10 +182,10 @@ cargo run --example probe        # print output devices + paired Bluetooth devic
 ```
 
 `scripts/demo-vhs.sh` produces the README demo: it drives the real mock build with
-`cliclick`, records the Duet window itself with `screencapture -l` and writes `docs/demo.gif`
-and `docs/demo.mp4` (~20 seconds; needs Screen Recording + Accessibility permission, and the
-window must be on the visible desktop). `DEMO_LOOK=vhs` brings back the tape grade, and
-`DEMO_DRY_RUN=1` prints every command it would run.
+`cliclick`, records the window's rect with `screencapture -v` and writes `docs/demo.gif`
+and `docs/demo.mp4` (~15 seconds; needs Screen Recording + Accessibility permission, and the
+window must be on the visible desktop). `DEMO_LOOK=vhs` brings back the tape grade,
+`DEMO_ZOOM` sets the render scale, and `DEMO_DRY_RUN=1` prints every command it would run.
 
 Commits on `main` must be signed: the repository enforces
 `required_signatures` (Settings › Rules), so a branch or tag you push with

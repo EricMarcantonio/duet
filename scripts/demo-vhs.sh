@@ -8,8 +8,9 @@
 #
 #   1  preflight   ffmpeg/ffprobe, cliclick, cargo build, screen unlocked, a
 #                  screen-capture device available -> actionable message, exit 1
-#   2  performance DUET_MOCK=1 DUET_WINDOWED=1 in the background, positioned with
-#                  osascript at a fixed rect, driven with cliclick (~34 s)
+#   2  performance DUET_MOCK=1 DUET_WINDOWED=1 DUET_ZOOM=<zoom> in the background,
+#                  positioned with osascript at a fixed rect, driven with cliclick
+#                  (~14 s)
 #   3  capture     ffmpeg avfoundation screen capture (fallback: screencapture -v)
 #   4  grade       one documented ffmpeg filter chain (tape bleed, grain,
 #                  scanlines, vignette, PLAY badge, running timecode). The two
@@ -28,6 +29,13 @@
 #   DEMO_KEEP=1        keep the temp dir (raw capture, filter script, log)
 #   DEMO_SKIP_BUILD=1  reuse the existing ./target/debug/duet
 #   DEMO_WIN_X/Y       override the window's top-left position in screen points
+#   DEMO_ZOOM=<n>      page zoom (1-3, default 1.6). The panel is a fixed 400x600
+#                      pt, so the display alone yields 800x1200 px; zoom makes the
+#                      webview re-render at a larger scale, so the take carries
+#                      real detail instead of an upscale. 1.6 -> 1280x1920 px.
+#   DEMO_BACKDROP=<c>  colour the window's rounded corners are flattened onto
+#                      (default 0x1E1E20, the panel's own background)
+#   DEMO_RADIUS=<px>   window corner radius at 2x (default 34)
 #   DEMO_APP_NAME      override the process name used with System Events (duet)
 #   DEMO_AVFOUNDATION_INPUT
 #                      override the avfoundation input, e.g. "1:none"
@@ -89,8 +97,30 @@ die() {
 # Y_PICK_ROW1/2/3 are the A/B centres, Y_PICK_ROW1_LIVE the C/D centre of row 1.
 # A row is 32 px tall, so each click has ~16 px of slack: if one lands on the
 # wrong control, move that single offset by +-17 and re-run.
-WIN_W=400
-WIN_H=600
+# Page zoom for the take. The layout is a fixed 400x600 pt, so even a Retina
+# display only yields 800x1200 px, which is soft at any width the README renders
+# it. DUET_ZOOM makes the webview re-render the page at a larger scale, so the
+# capture carries real detail instead of an upscale. Keep the window inside the
+# screen: 400x600 pt x zoom has to fit (1.6 -> 640x960 pt, 1280x1920 px).
+ZOOM="${DEMO_ZOOM:-1.6}"
+case "$ZOOM" in
+    '' | *[!0-9.]*) die "DEMO_ZOOM must be a number between 1 and 3 (got '$ZOOM')" ;;
+esac
+if ! awk -v z="$ZOOM" 'BEGIN { exit !(z >= 1 && z <= 3) }'; then
+    die "DEMO_ZOOM must be between 1 and 3 (got '$ZOOM')"
+fi
+# Backdrop the window's transparent rounded corners are flattened onto, and the
+# corner radius in pixels at 2x (a standard macOS window is ~17 pt). Both the
+# window capture and the screen capture use these, so a take looks the same on
+# any wallpaper.
+DEMO_BACKDROP="${DEMO_BACKDROP:-0x1E1E20}"   # the panel's own background
+DEMO_RADIUS="${DEMO_RADIUS:-34}"             # window corner radius, px at 2x
+DEMO_PAD="${DEMO_PAD:-32}"
+
+WIN_W="$(awk -v z="$ZOOM" 'BEGIN { printf "%d", 400 * z + 0.5 }')"
+WIN_H="$(awk -v z="$ZOOM" 'BEGIN { printf "%d", 600 * z + 0.5 }')"
+# Pixels in the capture: the display's own 2x on top of the zoom.
+PX_W=$((WIN_W * 2))
 
 # Window-relative click coordinates.
 X_CTA=200             # hero CTA (full width); its centre
@@ -128,8 +158,8 @@ T_CONNECT=2.6    # the pair lands Connected and the rows shift up
 T_TOGETHER=3.2   # "Listen together": the Duet output is created, cards slide in
 T_DRAG=2.6       # volume drag plus the readout settling
 T_UNTICK=0       # unused: the untick beat is skipped so the take stays under 15 s
-T_DONE=2.6       # close the picker; the hero settles
-T_TAIL=1.8       # hold the finished state before the capture stops
+T_DONE=0         # unused: the picker stays open at the end (see below)
+T_TAIL=2.4       # hold the finished state before the capture stops
 
 # The recorder starts before the first click, so its spin-up has to be part of
 # the capture duration or the tail of the take is cut off.
@@ -139,11 +169,14 @@ REC_LEAD=1.5
 # Output / encode settings
 # ---------------------------------------------------------------------------
 FPS=30
-MP4_W=720        # 400x600 -> 720x1080 (aspect kept via scale=-2)
+# The window is a fixed 400x600 pt, and `screencapture -l` hands back the
+# window at native 2x (800x1200 px). Encode at that size: downscaling to 720
+# threw away half the detail, which is why the README looked like 480p.
+MP4_W=$PX_W        # the capture's real pixels; aspect kept via scale=-2
 MP4_CRF=26       # lower = bigger; the 6 MB cap is checked before docs/ is written
-GIF_FPS=13
-GIF_W=640
-GIF_COLORS=96    # tape grain is expensive in a palette; 96 keeps it under 8 MB
+GIF_FPS=15
+GIF_W=$PX_W        # match the capture: sharpen by displaying it smaller below
+GIF_COLORS=128   # no grain in the clean look: 128 keeps text crisp under 8 MB
 GIF_DENOISE=3:2:6:6 # hqdn3d luma/chroma spatial+temporal; the GIF's size lever
 # Size levers, in the order worth trying when a cap is hit: GIF_COLORS (96 -> 64),
 # then the T_* timings (a shorter take), then GIF_W. The grain is the expensive
@@ -356,11 +389,13 @@ detect_screen_input() {
 #   avfoundation  ffmpeg screen device, cropped to the window rect afterwards.
 #   screen        screencapture -v -R, cropped at record time.
 # DEMO_CAPTURE overrides the choice.
-CAPTURE_MODE="${DEMO_CAPTURE:-window}"
+CAPTURE_MODE="${DEMO_CAPTURE:-screen}"
 AV_INPUT=""
 case "$CAPTURE_MODE" in
     window)
         note "ok: capture mode: window (screencapture -l, immune to other apps and Spaces)"
+        note "    note: window grabs run at ~6 fps (PNG encode per frame); 'screen' is"
+        note "    smoother when the window is on the visible desktop"
         ;;
     avfoundation | screen)
         if have ffmpeg; then
@@ -527,8 +562,10 @@ note "  pick rows       $X_PICK_NAME,{$Y_PICK_ROW1|$Y_PICK_ROW2|$Y_PICK_ROW3}  r
 note "  volume slider   $X_SLIDER_FROM,$Y_SLIDER -> $X_SLIDER_TO,$Y_SLIDER        Done  $X_DONE,$Y_DONE"
 
 # Absolute click targets = window origin + the offsets documented above.
-abs_x() { printf '%s' "$((WX + $1))"; }
-abs_y() { printf '%s' "$((WY + $1))"; }
+# Absolute click targets = window origin + the offsets documented above, scaled
+# by the page zoom: the offsets are CSS pixels, the window is in points.
+abs_x() { printf '%s' "$(awk -v a="$1" -v z="$ZOOM" -v w="$WX" 'BEGIN { printf "%d", w + a * z + 0.5 }')"; }
+abs_y() { printf '%s' "$(awk -v a="$1" -v z="$ZOOM" -v w="$WY" 'BEGIN { printf "%d", w + a * z + 0.5 }')"; }
 
 click() { # window-relative x, y
     local x y
@@ -546,7 +583,16 @@ PERFORM="$(awk -v a="$T_START" -v b="$T_OPEN" -v c="$T_CONNECTING" -v d="$T_CONN
     'BEGIN { printf "%.1f", a + b + c + d + e + f + g + h + i }')"
 TOTAL="$(awk -v p="$PERFORM" -v lead="$REC_LEAD" 'BEGIN { printf "%.1f", p + lead }')"
 # screencapture's -V wants whole seconds; ffmpeg's -t takes the exact float.
-TOTAL_SC="$(awk -v t="$TOTAL" 'BEGIN { printf "%d", int(t + 0.999) }')"
+# `screencapture -v` spends a second or two spooling up and then counts -V from
+# its own start, so a take requested at exactly $TOTAL loses the last beat (the
+# "Done" click and the finished cards). Ask for a few extra seconds: the tail is
+# a static panel, which costs almost nothing in the GIF.
+SC_HEADROOM=2
+# Length of the published clip: the performance plus a beat to settle, never the
+# recorder's own tail.
+OUT_LEN="$(awk -v p="$PERFORM" 'BEGIN { printf "%.2f", p + 0.6 }')"
+
+TOTAL_SC="$(awk -v t="$TOTAL" -v h="$SC_HEADROOM" 'BEGIN { printf "%d", int(t + 0.999) + h }')"
 note "performance: ${PERFORM}s, capture: ${TOTAL}s at ${FPS} fps (${REC_LEAD}s recorder lead-in)"
 
 # ---------------------------------------------------------------------------
@@ -586,7 +632,7 @@ focus_window() {
         run cliclick "c:$(abs_x "$X_CTA"),$(abs_y 100)" # inside the hero card, no control
         pause 0.5
         if ((DRY_RUN)); then return 0; fi
-        main="$(osascript -e 'tell application "System Events" to tell (first process whose name is "duet") to return value of attribute "AXMain" of window 1' 2>/dev/null)"
+        main="$(osascript -e 'tell application "System Events" to tell (first process whose name is "duet") to return value of attribute "AXMain" of window 1' 2>/dev/null || true)"
         if [[ "$main" == "true" ]]; then
             note "ok: the window is key (AXMain)"
             pause 0.5
@@ -622,9 +668,10 @@ perform() {
         "du:$(abs_x "$X_SLIDER_TO"),$(abs_y "$Y_SLIDER")"
     pause "$T_DRAG"
 
-    # 5. close the picker so the take ends on the listener cards
-    click "$X_DONE" "$Y_DONE"
-    pause "$T_DONE"
+    # 5. hold on the finished state. Closing the picker here used to be the last
+    #    beat, but the poll that follows it re-reads the mock device's volume and
+    #    snaps the card to 100 %, which reads as a bug in the take. Ending with the
+    #    picker open keeps both cards and the drag's value visible.
     pause "$T_TAIL"
 }
 
@@ -714,7 +761,15 @@ resolve_window_id() {
 # contents, so whatever else is on screen — another app, another Space, a
 # full-screen player — never ends up in the take. Paced to WINDOW_FPS; the
 # frames are assembled into the same intermediate file the other modes produce.
-WINDOW_FPS=12
+WINDOW_FPS=15
+# Backdrop the transparent window corners are flattened onto, and the padding
+# around the panel (px, at native 2x).
+DEMO_BACKDROP="${DEMO_BACKDROP:-0x1B1B1F}"
+DEMO_PAD="${DEMO_PAD:-32}"
+# Backdrop the transparent window corners are flattened onto, and the padding
+# around the panel (px, at native 2x).
+DEMO_BACKDROP="${DEMO_BACKDROP:-0x1E1E20}"
+DEMO_PAD="${DEMO_PAD:-32}"
 capture_window() {
     say "Capture (window $WINDOW_ID, ${WINDOW_FPS} fps for ${TOTAL}s)"
     local frames="$TMP/frames" start now count
@@ -742,9 +797,21 @@ print(max(0.0, min(slot, -used + slot)))")"
         # Assemble: the measured rate keeps the pacing honest even if a frame
         # grab ran long on a busy machine.
         rate="$(python3 -c "print(max(1.0, $count / max(0.1, $elapsed)))")"
+        printf '   frames=%s elapsed=%ss rate=%s fps\n' "$count" "$elapsed" "$rate"
+        # A window capture has transparent rounded corners. Encoding that straight
+        # to h264 or GIF turns the alpha into black, so the take looked like a
+        # rounded panel inside a black box. Composite every frame onto the panel's
+        # own background colour first (with a little breathing room), then the
+        # corners simply disappear into it.
+        local w h
+        w="$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of default=nw=1:nk=1 "$frames/00001.png" 2>/dev/null || echo 800)"
+        h="$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of default=nw=1:nk=1 "$frames/00001.png" 2>/dev/null || echo 1200)"
         ffmpeg -y -hide_banner -loglevel warning -framerate "$rate" \
             -i "$frames/%05d.png" \
-            -c:v libx264 -preset veryfast -crf 16 -pix_fmt yuv420p "$RAW" >/dev/null 2>&1
+            -f lavfi -t "$elapsed" -i "color=c=${DEMO_BACKDROP}:s=$((w + 2 * DEMO_PAD))x$((h + 2 * DEMO_PAD))" \
+            -filter_complex "[1:v]format=rgb24[bg];[bg][0:v]overlay=${DEMO_PAD}:${DEMO_PAD}:format=auto,format=yuv420p[v]" \
+            -map "[v]" -shortest \
+            -c:v libx264 -preset veryfast -crf 14 "$RAW" >/dev/null 2>&1
     ) &
     REC_PID=$!
 }
@@ -952,8 +1019,11 @@ render_overlay_assets() {
 
 encode_mp4() {
     say "Encode MP4"
+    # -t trims to the performance: `screencapture -v` keeps the recorder running a
+    # few seconds past its -V window and pads the end with a held frame, which
+    # otherwise doubles the clip length with a freeze.
     local opts=(-an -c:v libx264 -preset slow -crf "$MP4_CRF" -pix_fmt yuv420p
-        -movflags +faststart -r "$FPS" "$MP4_TMP")
+        -movflags +faststart -r "$FPS" -t "$OUT_LEN" "$MP4_TMP")
     if [[ "$OVERLAY" == "pil" ]]; then
         # 0 the capture, 1 the badge still (one frame, repeated by eof_action), 2
         # the 1 fps timecode sequence. Same filters, same output file, same caps
@@ -986,20 +1056,61 @@ assert_under() { # file, limit bytes, published name, retune hint
 
 # True when the frame carries Duet's accent blue (the primary button). Guards
 # against a take of some other app: luma alone cannot tell them apart.
-accent_present() {
-    local raw="$1" tmp
-    tmp="$(mktemp -d)"
-    ffmpeg -y -hide_banner -loglevel error -ss 3 -i "$raw" -frames:v 1 "$tmp/f.png" >/dev/null 2>&1 || return 0
-    python3 - "$tmp/f.png" <<'PYEOF'
+accent_in_png() {
+    python3 - "$1" <<'PYEOF'
 import sys
 from PIL import Image
 im = Image.open(sys.argv[1]).convert("RGB").resize((160, 240))
 hits = sum(1 for r, g, b in im.getdata() if b > 150 and b - r > 60 and g < b)
 sys.exit(0 if hits > 0.004 * 160 * 240 else 1)
 PYEOF
+}
+
+accent_present() {
+    local raw="$1" tmp
+    tmp="$(mktemp -d)"
+    ffmpeg -y -hide_banner -loglevel error -ss 3 -i "$raw" -frames:v 1 "$tmp/f.png" >/dev/null 2>&1 || return 0
+    accent_in_png "$tmp/f.png"
     local rc=$?
     rm -rf "$tmp"
     return $rc
+}
+
+shot() { # still of the window rect -> path
+    screencapture -x -R"${WX},${WY},${WIN_W},${WIN_H}" "$1" 2>/dev/null || true
+}
+
+shots_differ() { # a, b -> 0 when the panel visibly changed between the two
+    python3 - "$1" "$2" <<'PYEOF'
+import sys
+from PIL import Image, ImageChops
+a = Image.open(sys.argv[1]).convert("L").resize((128, 192))
+b = Image.open(sys.argv[2]).convert("L").resize((128, 192))
+hist = ImageChops.difference(a, b).histogram()
+mean = sum(i * n for i, n in enumerate(hist)) / (128 * 192)
+sys.exit(0 if mean > 3 else 1)
+PYEOF
+}
+
+# A window can exist, sit at the right rect and be frontmost, and still be a
+# blank webview: a zoomed page paints later, and a click sent before the first
+# paint does nothing at all — which is how a take comes out with every beat
+# several seconds late. Wait for the hero's accent blue before clicking.
+await_paint() {
+    local i still="$TMP/paint.png"
+    printf '   … wait up to 20s for the panel to paint\n'
+    for ((i = 0; i < 40; i++)); do
+        if ((DRY_RUN)); then
+            return 0
+        fi
+        shot "$still"
+        if [[ -s "$still" ]] && accent_in_png "$still"; then
+            note "ok: the panel is painted"
+            return 0
+        fi
+        sleep 0.5
+    done
+    die "the Duet window never painted (no accent colour in a still after 20 s) — check $APP_LOG, and grant this terminal Screen Recording permission"
 }
 
 frame_stats() { # file, seek seconds -> "<YAVG> <YMAX>" for one frame
@@ -1015,15 +1126,16 @@ frame_stats() { # file, seek seconds -> "<YAVG> <YMAX>" for one frame
 # Run
 # ---------------------------------------------------------------------------
 launch_app() {
-    printf '   $ %s\n' "$(fmt_cmd env "DUET_MOCK=$MOCK" DUET_WINDOWED=1 \
+    printf '   $ %s\n' "$(fmt_cmd env "DUET_MOCK=$MOCK" DUET_WINDOWED=1 "DUET_ZOOM=$ZOOM" \
         "DUET_CONFIG=$TMP/duet-config.json" "DUET_LOG=$APP_LOG" "$BIN")"
     if ((DRY_RUN)); then
         return 0
     fi
     # DUET_MOCK picks the mock variant (src/ui/demo.rs); DUET_WINDOWED forces a
-    # normal window instead of the menu-bar popover (src/main.rs); DUET_CONFIG
-    # and DUET_LOG keep the run out of the real nickname file and log.
-    DUET_MOCK="$MOCK" DUET_WINDOWED=1 \
+    # normal window instead of the menu-bar popover (src/main.rs); DUET_ZOOM grows
+    # the webview's render scale so the take has real pixels; DUET_CONFIG and
+    # DUET_LOG keep the run out of the real nickname file and log.
+    DUET_MOCK="$MOCK" DUET_WINDOWED=1 DUET_ZOOM="$ZOOM" \
         DUET_CONFIG="$TMP/duet-config.json" DUET_LOG="$APP_LOG" \
         "$BIN" >"$TMP/app.out" 2>&1 &
     APP_PID=$!
@@ -1044,8 +1156,10 @@ pause 1.0
 # Read the geometry back: `set position` can be ignored before the window is laid
 # out, and the crop then records whatever sits at that rect - a wasted take
 # captured the user's video player instead of Duet.
-actual_pos="$(osascript -e 'tell application "System Events" to tell (first process whose name is "duet") to return position of window 1' 2>/dev/null)"
-actual_size="$(osascript -e 'tell application "System Events" to tell (first process whose name is "duet") to return size of window 1' 2>/dev/null)"
+# `|| true` on both: under `set -e` a failing command substitution exits the
+# script with no message at all, which is indistinguishable from a hang.
+actual_pos="$(osascript -e 'tell application "System Events" to tell (first process whose name is "duet") to return position of window 1' 2>/dev/null || true)"
+actual_size="$(osascript -e 'tell application "System Events" to tell (first process whose name is "duet") to return size of window 1' 2>/dev/null || true)"
 if ((!DRY_RUN)); then
     note "window reads back at ${actual_pos:-?} size ${actual_size:-?} (wanted {$WX, $WY} ${WIN_W}x${WIN_H})"
     [[ "$actual_pos" == "$WX, $WY" ]] ||
@@ -1057,16 +1171,30 @@ fi
 say "Focus"
 focus_window
 
+await_paint
+
 # The window id is only known once the window exists: resolve it after positioning.
 if [[ "$CAPTURE_MODE" == "window" ]]; then
     resolve_window_id
 fi
 
 # Pre-roll: open the picker before the recorder starts, so the first frame is the
-# populated panel instead of the idle window with its empty bottom half.
+# populated panel instead of the idle window with its empty bottom half. Retried,
+# because a click that lands a frame early is otherwise invisible until the take
+# is watched.
 if ((!DRY_RUN)); then
-    click "$X_CTA" "$Y_CTA_OPEN_PICKER"
-    pause 1.2
+    shot "$TMP/pre-click.png"
+    for _ in 1 2 3; do
+        click "$X_CTA" "$Y_CTA_OPEN_PICKER"
+        pause 1.2
+        shot "$TMP/post-click.png"
+        if shots_differ "$TMP/pre-click.png" "$TMP/post-click.png"; then
+            note "ok: the picker opened"
+            break
+        fi
+    done
+    shots_differ "$TMP/pre-click.png" "$TMP/post-click.png" ||
+        note "WARN: the panel looks unchanged after the pre-roll click - the take will start on the idle window"
 fi
 
 # The capture starts first and stops itself at $TOTAL; the performance plays into
@@ -1140,6 +1268,39 @@ if ((!DRY_RUN)); then
 fi
 
 say "Grade"
+
+# A screen grab of the window rect carries the window's rounded corners, so
+# whatever sits behind the window — the desktop, another app — shows through
+# them. Composite the capture onto the panel's own background through a
+# rounded-rect mask: the corners then vanish into the panel on any desktop.
+# avfoundation is skipped: that capture is the whole screen and is cropped to
+# the window later, in the grade chain.
+flatten_corners() {
+    local w h dur out="$TMP/capture-flat.mov" mask="$TMP/corner-mask.png"
+    w="$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of default=nw=1:nk=1 "$RAW_FILE")"
+    h="$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of default=nw=1:nk=1 "$RAW_FILE")"
+    dur="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$RAW_FILE")"
+    python3 - "$w" "$h" "$DEMO_RADIUS" "$mask" <<'PY'
+import sys
+from PIL import Image, ImageDraw
+w, h, r, out = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+mask = Image.new("L", (w, h), 0)
+ImageDraw.Draw(mask).rounded_rectangle((0, 0, w - 1, h - 1), radius=r, fill=255)
+mask.save(out)
+PY
+    run ffmpeg -y -hide_banner -loglevel warning \
+        -i "$RAW_FILE" \
+        -loop 1 -framerate "$FPS" -i "$mask" \
+        -f lavfi -i "color=c=${DEMO_BACKDROP}:s=${w}x${h}" \
+        -t "$dur" \
+        -filter_complex "[0:v]format=rgba[cap];[cap][1:v]alphamerge[fg];[2:v][fg]overlay=format=auto,format=yuv420p[v]" \
+        -map "[v]" -c:v libx264 -preset veryfast -crf 14 "$out"
+    RAW_FILE="$out"
+    note "corners flattened onto ${DEMO_BACKDROP} (radius ${DEMO_RADIUS} px)"
+}
+if [[ "$CAPTURE_MODE" != "avfoundation" ]] && ((!DRY_RUN)); then
+    flatten_corners
+fi
 GRADE_GRAPH="$(build_grade_filter)"
 # Keep a copy of the chain next to the capture (DEMO_KEEP=1 preserves it) and
 # pass it inline: ffmpeg 9 dropped -filter_script, -vf takes the same graph.
