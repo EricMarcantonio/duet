@@ -15,6 +15,39 @@ pub fn noise_control_hint() -> Option<&'static str> {
     }
 }
 
+/// Open a URL in the user's browser (the update footer's download link).
+///
+/// `spawn` rather than `status`: the browser may stay in the foreground for as
+/// long as the user likes, and this is called from a click handler.
+pub fn open_url(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("couldn't open the link: {e}"))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // The empty string is `start`'s window-title argument: without it a
+        // quoted URL would be taken as the title and nothing would open.
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("couldn't open the link: {e}"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("couldn't open the link: {e}"))
+    }
+}
+
 /// Open the system Bluetooth settings (offered when a connect fails, e.g. on
 /// Windows where connecting must go through Settings).
 pub fn open_bluetooth_settings() -> Result<(), String> {
