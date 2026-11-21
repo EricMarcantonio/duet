@@ -12,7 +12,10 @@
 #                  osascript at a fixed rect, driven with cliclick (~34 s)
 #   3  capture     ffmpeg avfoundation screen capture (fallback: screencapture -v)
 #   4  grade       one documented ffmpeg filter chain (tape bleed, grain,
-#                  scanlines, vignette, PLAY badge, running timecode)
+#                  scanlines, vignette, PLAY badge, running timecode). The two
+#                  text elements come from drawtext when this ffmpeg has it, or
+#                  from Pillow-rendered PNGs composited with `overlay` when it
+#                  does not (see the overlay capability block in preflight)
 #   5  encode      docs/demo.mp4 (h264, yuv420p, +faststart) and
 #                  docs/demo.gif (palettegen/paletteuse, 13 fps, 640 px wide)
 #   6  assert      GIF <= 8 MB, MP4 <= 6 MB, then move both into docs/
@@ -29,11 +32,16 @@
 #   DEMO_AVFOUNDATION_INPUT
 #                      override the avfoundation input, e.g. "1:none"
 #   DEMO_ALLOW_NO_BADGE=1
-#                      the VHS text overlay (PLAY badge + running timecode) needs
-#                      ffmpeg's drawtext filter, i.e. a build with libfreetype;
-#                      Homebrew's ffmpeg has it, a hand-rolled build may not. If it
-#                      is missing the script exits 1 (never silently drops the
-#                      badge); set this to record without the text overlay anyway.
+#                      record without the VHS text overlay (PLAY badge + running
+#                      timecode) at all.
+#   DEMO_FORCE_DRAWTEXT=1
+#                      prefer the drawtext overlay path even on a machine where the
+#                      filter probe says otherwise. The overlay has two paths:
+#                      drawtext (needs an ffmpeg built with libfreetype, which
+#                      Homebrew's formula passes) and a Pillow PNG fallback for
+#                      builds without it. Forcing drawtext when the filter really is
+#                      absent degrades to the fallback with a warning instead of
+#                      emitting a filter graph ffmpeg would reject.
 #
 # Permissions: run this from a terminal that already holds Screen Recording and
 # Accessibility permission (System Settings > Privacy & Security). Without them
@@ -141,6 +149,14 @@ GIF_DENOISE=3:2:6:6 # hqdn3d luma/chroma spatial+temporal; the GIF's size lever
 MAX_GIF_BYTES=$((8 * 1024 * 1024))
 MAX_MP4_BYTES=$((6 * 1024 * 1024))
 
+# Placement of the two text elements, in output pixels. Shared by both overlay
+# paths (drawtext x/y and the `overlay` x/y of the Pillow PNGs) so the two looks
+# stay on the same baseline.
+BADGE_X=22       # left edge of "PLAY ▶"
+BADGE_Y=18       # top edge of "PLAY ▶"
+TC_X=22          # left edge of the running timecode
+TC_BOTTOM=16     # gap between the timecode's bottom edge and the frame bottom
+
 DRY_RUN=0
 if [[ -n "${DEMO_DRY_RUN:-}" && "${DEMO_DRY_RUN}" != "0" ]]; then DRY_RUN=1; fi
 KEEP=0
@@ -160,6 +176,9 @@ TMP="$(mktemp -d "$TMP_BASE/duet-demo.XXXXXX")"
 RAW="$TMP/capture.mkv"          # avfoundation path
 RAW_SC="$TMP/capture-sc.mov"    # screencapture -v fallback
 GRADE_FILTER="$TMP/grade.filter"
+OVERLAY_PY="$TMP/overlay_pngs.py" # Pillow fallback renderer (written at run time)
+BADGE_PNG="$TMP/badge-play.png"   # "PLAY ▶" still, overlaid for the whole clip
+TC_PATTERN="$TMP/tc_%03d.png"     # one timecode frame per second of footage
 MP4_TMP="$TMP/demo.mp4"
 GIF_TMP="$TMP/demo.gif"
 APP_LOG="$TMP/duet.log"
@@ -340,7 +359,8 @@ if ((DRY_RUN)); then
 fi
 
 # Font for the PLAY badge and the timecode: it must carry U+25B6 (BLACK
-# RIGHT-POINTING TRIANGLE) for the "▶". First existing candidate wins.
+# RIGHT-POINTING TRIANGLE) for the "▶". First existing candidate wins. Drawtext
+# loads it directly; the Pillow fallback hands the same path to ImageFont.
 FONT_PATH=""
 for cand in \
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf" \
@@ -355,34 +375,63 @@ done
 if [[ -z "$FONT_PATH" ]]; then
     if ((DRY_RUN)); then
         FONT_PATH="/System/Library/Fonts/Menlo.ttc"
-        note "MISSING (dry run continues): a drawtext font; assuming $FONT_PATH"
+        note "MISSING (dry run continues): an overlay font; assuming $FONT_PATH"
     else
-        die "no usable font for the drawtext badge (looked in /System/Library/Fonts)"
+        die "no usable font for the text overlay (looked in /System/Library/Fonts)"
     fi
 else
     note "ok: font $FONT_PATH"
 fi
 
-# The badge and the running timecode are drawtext, so this ffmpeg must be built
-# with libfreetype (`--enable-libfreetype`, which Homebrew's formula passes). A
-# build without it has no drawtext at all, and the VHS look would lose both of
-# its text elements: say so instead of quietly shipping a take without them.
-BADGE=1
-if have ffmpeg; then
-    if ffmpeg -hide_banner -filters 2>/dev/null | grep -qw drawtext; then
-        note "ok: ffmpeg drawtext (PLAY badge + running timecode)"
-    elif [[ -n "${DEMO_ALLOW_NO_BADGE:-}" ]]; then
-        BADGE=0
-        note "WARNING: this ffmpeg has no drawtext filter (built without libfreetype)"
-        note "         -> DEMO_ALLOW_NO_BADGE is set, recording without the text overlay"
-    else
-        if ((DRY_RUN)); then
-            note "WARNING: this ffmpeg has no drawtext filter (built without libfreetype)."
-            note "         The chain printed below keeps the two drawtext stages exactly as"
-            note "         specified; a real run exits 1 here unless DEMO_ALLOW_NO_BADGE=1 is"
-            note "         set, in which case those two stages are dropped."
+# The badge and the running timecode are text, and there are two ways to draw
+# them — pick the best one this machine can do:
+#
+#   drawtext  ffmpeg's own text filter. Needs a build with libfreetype
+#             (`--enable-libfreetype`, which Homebrew's formula passes). One
+#             filter chain, no extra assets: the preferred path.
+#   pil       this ffmpeg has no drawtext (a hand-rolled build may not), so the
+#             same two elements are rendered as transparent PNGs with python3 +
+#             Pillow and composited with `overlay`. The badge is one still
+#             overlaid for the whole clip; the timecode is one small PNG per
+#             second, `tc_%03d.png`, stepped at 1 fps. Same text, same colours,
+#             same shadow offsets as the drawtext stages.
+#   none      DEMO_ALLOW_NO_BADGE: skip the overlay entirely.
+#
+# Both paths write the same $MP4_TMP/$GIF_TMP and go through the same size caps;
+# only the filter graph and the encoder's input list differ.
+OVERLAY=""
+FORCE_DRAWTEXT=0
+if [[ -n "${DEMO_FORCE_DRAWTEXT:-}" && "${DEMO_FORCE_DRAWTEXT}" != "0" ]]; then
+    FORCE_DRAWTEXT=1
+fi
+
+have_drawtext() { ffmpeg -hide_banner -filters 2>/dev/null | grep -qw drawtext; }
+have_pillow() { python3 -c 'import PIL.Image, PIL.ImageDraw, PIL.ImageFont' >/dev/null 2>&1; }
+
+if [[ -n "${DEMO_ALLOW_NO_BADGE:-}" && "${DEMO_ALLOW_NO_BADGE}" != "0" ]]; then
+    OVERLAY="none"
+    note "ok: overlay path: none (DEMO_ALLOW_NO_BADGE is set, no PLAY badge/timecode)"
+else
+    if have ffmpeg && have_drawtext; then
+        OVERLAY="drawtext"
+        note "ok: overlay path: drawtext (this ffmpeg has the drawtext filter)"
+    elif ((FORCE_DRAWTEXT)); then
+        note "WARNING: DEMO_FORCE_DRAWTEXT is set, but this ffmpeg has no drawtext filter"
+        note "         (built without libfreetype). Refusing to emit a filter graph ffmpeg"
+        note "         would reject; degrading to the next available overlay path."
+    fi
+    if [[ -z "$OVERLAY" ]]; then
+        if have ffmpeg && have python3 && have_pillow; then
+            OVERLAY="pil"
+            note "ok: overlay path: pil (no drawtext -> PNG overlay via python3 + Pillow)"
+        elif ((DRY_RUN)); then
+            OVERLAY="pil"
+            note "MISSING (dry run continues): neither drawtext nor python3 + Pillow;"
+            note "         assuming the pil overlay path"
         else
-            die "this ffmpeg has no drawtext filter, so the PLAY badge and running timecode cannot be drawn — it was built without libfreetype. Fix: brew reinstall ffmpeg (Homebrew's formula enables freetype), or record without the overlay by setting DEMO_ALLOW_NO_BADGE=1"
+            note "this ffmpeg has no drawtext filter (built without libfreetype), and the"
+            note "Pillow fallback is unavailable (python3 + PIL.Image)."
+            die "cannot draw the PLAY badge and running timecode. Fix with: brew reinstall ffmpeg (its formula enables freetype), or python3 -m pip install Pillow for the fallback, or record without the overlay: DEMO_ALLOW_NO_BADGE=1"
         fi
     fi
 fi
@@ -556,8 +605,12 @@ capture_screencapture() {
 # ---------------------------------------------------------------------------
 # 6. Grade: one documented filter chain for the VHS look
 # ---------------------------------------------------------------------------
+# build_grade_filter prints the graph the MP4 encode consumes: a `-vf` chain for
+# the drawtext/none paths, a `-filter_complex` graph for the pil path (which
+# needs the extra overlay inputs). `overlay` runs last for the same reason
+# drawtext does — the grain and the scanlines must never sit on top of the text.
 build_grade_filter() {
-    local parts=()
+    local parts=() graph
     if [[ "$CAPTURE_MODE" == "avfoundation" ]]; then
         # Fraction-of-frame crop == the window rect, whatever the density is.
         parts+=("crop=w=trunc(iw*${WIN_W}/${SCREEN_W}):h=trunc(ih*${WIN_H}/${SCREEN_H}):x=trunc(iw*${WX}/${SCREEN_W}):y=trunc(ih*${WY}/${SCREEN_H})")
@@ -570,17 +623,187 @@ build_grade_filter() {
     parts+=("noise=alls=12:allf=t+u")                       # grain, temporal + uniform
     parts+=("drawgrid=w=iw:h=2:t=1:c=black@0.10")           # scanlines every 2 px
     parts+=("vignette=angle=PI/5")                          # dark CRT corners
-    if ((BADGE)); then
+    if [[ "$OVERLAY" == "drawtext" ]]; then
         # Text last, so the grain and the scanlines never sit on top of it.
-        parts+=("drawtext=fontfile='${FONT_PATH}':text='PLAY ▶':fontcolor=white@0.85:fontsize=22:x=22:y=18:shadowcolor=black@0.55:shadowx=2:shadowy=2")
-        parts+=("drawtext=fontfile='${FONT_PATH}':text='%{pts\\:hms}':fontcolor=white@0.70:fontsize=16:x=22:y=h-th-16:shadowcolor=black@0.55:shadowx=1:shadowy=1")
+        parts+=("drawtext=fontfile='${FONT_PATH}':text='PLAY ▶':fontcolor=white@0.85:fontsize=22:x=${BADGE_X}:y=${BADGE_Y}:shadowcolor=black@0.55:shadowx=2:shadowy=2")
+        parts+=("drawtext=fontfile='${FONT_PATH}':text='%{pts\\:hms}':fontcolor=white@0.70:fontsize=16:x=${TC_X}:y=h-th-${TC_BOTTOM}:shadowcolor=black@0.55:shadowx=1:shadowy=1")
     fi
     local IFS=,
-    printf '%s' "${parts[*]}"
+    graph="${parts[*]}"
+    if [[ "$OVERLAY" == "pil" ]]; then
+        # Inputs: 0 the capture, 1 the badge still, 2 the 1 fps timecode sequence.
+        #
+        # Badge: a plain single-image input, NOT `-loop 1`. A looping second input
+        # never ends, so overlay keeps repeating the last graded frame and the
+        # encode never terminates. One frame plus `eof_action=repeat` covers the
+        # whole clip and still ends with the video (measured: 300 frames in, 300
+        # out).
+        #
+        # Timecode: `shortest=1` because a repeating second input that outlasts the
+        # video stretches the output past the real clip length (measured: 331
+        # frames out for 300 in). The sequence is generated a couple of frames
+        # longer than the expected capture, so it can never be the input that ends
+        # first; with `shortest=1` the video alone decides the length.
+        graph="[0:v]${graph}[graded]"
+        graph+=";[graded][1:v]overlay=x=${BADGE_X}:y=${BADGE_Y}:eof_action=repeat:shortest=0[badged]"
+        graph+=";[badged][2:v]overlay=x=${TC_X}:y=main_h-overlay_h-${TC_BOTTOM}:eof_action=repeat:shortest=1[v]"
+    fi
+    printf '%s' "$graph"
 }
 
 build_gif_graph() { # one filter_complex string for palettegen/paletteuse
     printf '%s' "hqdn3d=${GIF_DENOISE},fps=${GIF_FPS},scale=${GIF_W}:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=${GIF_COLORS}:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle"
+}
+
+# ---------------------------------------------------------------------------
+# 6b. Overlay assets — the Pillow fallback draws the text as PNGs
+# ---------------------------------------------------------------------------
+# drawtext needs an ffmpeg built with libfreetype. When that filter is absent the
+# same two elements are drawn once with Pillow and composited by `overlay`:
+#
+#   badge-play.png     "PLAY ▶", one still, overlaid across the whole clip
+#   tc_000.png …       the running timecode, one small frame per second, so the
+#                      second overlay input, stepped at 1 fps, advances by itself
+#
+# 1 fps bounds the asset count (~35 frames for a 35 s take) and keeps every PNG a
+# few hundred bytes. At fontsize 16 in a 720 px-wide encode the difference from
+# 30 fps is invisible, and the `overlay` filter interpolates nothing either way.
+write_overlay_py() {
+    if ((DRY_RUN)); then
+        printf '   # would write %s (the Pillow overlay renderer)\n' "$OVERLAY_PY"
+        return 0
+    fi
+    cat >"$OVERLAY_PY" <<'PY'
+#!/usr/bin/env python3
+"""Render the VHS text overlay as transparent PNGs.
+
+Used by scripts/demo-vhs.sh when the ffmpeg in PATH was built without
+libfreetype, so it has no `drawtext` filter. It draws the same two elements the
+drawtext stages draw:
+
+    "PLAY ▶"   white @ 0.85, black shadow @ 0.55 offset (2, 2), 22 px
+    timecode   white @ 0.70, black shadow @ 0.55 offset (1, 1), 16 px
+
+The badge is one image; the timecode is one image per second, so ffmpeg can step
+them as a 1 fps input. Each PNG is cropped to the text, so the overlay x/y in the
+filter graph is the text's own top-left corner.
+
+Usage: overlay_pngs.py FONT BADGE_PNG OUT_DIR TC_COUNT
+"""
+import os
+import sys
+
+from PIL import Image, ImageDraw, ImageFont
+
+BADGE_TEXT = "PLAY \u25b6"
+BADGE_FONT_SIZE = 22
+BADGE_FILL = (255, 255, 255, 217)     # white @ 0.85
+BADGE_SHADOW = (0, 0, 0, 140)         # black @ 0.55
+BADGE_SHADOW_OFFSET = (2, 2)
+
+TC_FONT_SIZE = 16
+TC_FILL = (255, 255, 255, 179)        # white @ 0.70
+TC_SHADOW = (0, 0, 0, 140)            # black @ 0.55
+TC_SHADOW_OFFSET = (1, 1)
+
+
+def render(font_path, text, size, fill, shadow, offset):
+    """One tightly cropped RGBA image: shadow underneath, the text on top."""
+    font = ImageFont.truetype(font_path, size)
+    probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    left, top, right, bottom = probe.textbbox((0, 0), text, font=font)
+    image = Image.new(
+        "RGBA", (right - left + offset[0], bottom - top + offset[1]), (0, 0, 0, 0)
+    )
+    draw = ImageDraw.Draw(image)
+    # Move the text bbox's own origin to (0, 0), then knock the shadow back by
+    # the drawtext shadow offset.
+    x, y = -left, -top
+    draw.text((x + offset[0], y + offset[1]), text, font=font, fill=shadow)
+    draw.text((x, y), text, font=font, fill=fill)
+    return image
+
+
+def timecode(seconds):
+    """The shape drawtext's pts:hms format prints: H:MM:SS.mm."""
+    return "%d:%02d:%05.2f" % (seconds // 3600, (seconds % 3600) // 60, seconds % 60)
+
+
+def main(argv):
+    if len(argv) != 5:
+        sys.stderr.write("usage: overlay_pngs.py FONT BADGE_PNG OUT_DIR TC_COUNT\n")
+        return 2
+    font_path, badge_path, out_dir, count = (
+        argv[1],
+        argv[2],
+        argv[3],
+        int(argv[4]),
+    )
+    render(
+        font_path, BADGE_TEXT, BADGE_FONT_SIZE, BADGE_FILL, BADGE_SHADOW,
+        BADGE_SHADOW_OFFSET,
+    ).save(badge_path)
+    for second in range(count):
+        render(
+            font_path, timecode(second), TC_FONT_SIZE, TC_FILL, TC_SHADOW,
+            TC_SHADOW_OFFSET,
+        ).save(os.path.join(out_dir, "tc_%03d.png" % second))
+    print("overlay: %s + %d timecode frames in %s" % (badge_path, count, out_dir))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+PY
+}
+
+overlay_frame_count() { # seconds of footage -> timecode PNGs to generate
+    # One per second of the capture plus a couple of spares, bounded so a
+    # pathological TOTAL can never spew hundreds of files. The spares are what
+    # make `shortest=1` on the timecode overlay safe: it must never be the input
+    # that ends first.
+    awk -v t="$TOTAL" 'BEGIN { n = int(t); if (t > n) n++; n += 2; if (n > 120) n = 120; print n }'
+}
+
+render_overlay_assets() {
+    say "Overlay ($OVERLAY)"
+    case "$OVERLAY" in
+    drawtext)
+        note "drawtext in the grade chain: \"PLAY ▶\" at ${BADGE_X},${BADGE_Y}; timecode at ${TC_X}, bottom-${TC_BOTTOM}"
+        ;;
+    pil)
+        TC_FRAMES="$(overlay_frame_count)"
+        note "drawtext is unavailable -> one badge still + ${TC_FRAMES} timecode PNGs at 1 fps"
+        write_overlay_py
+        run python3 "$OVERLAY_PY" "$FONT_PATH" "$BADGE_PNG" "$TMP" "$TC_FRAMES"
+        if ((!DRY_RUN)); then
+            [[ -s "$BADGE_PNG" ]] || die "the Pillow overlay produced no badge PNG ($BADGE_PNG)"
+            [[ -s "$TMP/tc_000.png" ]] || die "the Pillow overlay produced no timecode PNGs in $TMP"
+        fi
+        ;;
+    none)
+        note "DEMO_ALLOW_NO_BADGE: no PLAY badge, no running timecode"
+        ;;
+    esac
+}
+
+encode_mp4() {
+    say "Encode MP4"
+    local opts=(-an -c:v libx264 -preset slow -crf "$MP4_CRF" -pix_fmt yuv420p
+        -movflags +faststart -r "$FPS" "$MP4_TMP")
+    if [[ "$OVERLAY" == "pil" ]]; then
+        # 0 the capture, 1 the badge still (one frame, repeated by eof_action), 2
+        # the 1 fps timecode sequence. Same filters, same output file, same caps
+        # as the drawtext path — only the input list and -map differ.
+        run ffmpeg -y -hide_banner -loglevel warning \
+            -i "$RAW_FILE" \
+            -i "$BADGE_PNG" \
+            -framerate 1 -start_number 0 -i "$TC_PATTERN" \
+            -filter_complex "$GRADE_GRAPH" -map "[v]" "${opts[@]}"
+    else
+        run ffmpeg -y -hide_banner -loglevel warning -i "$RAW_FILE" \
+            -vf "$GRADE_GRAPH" "${opts[@]}"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -694,11 +917,9 @@ GRADE_GRAPH="$(build_grade_filter)"
 # pass it inline: ffmpeg 9 dropped -filter_script, -vf takes the same graph.
 write_text_file "$GRADE_FILTER" "$GRADE_GRAPH"
 
-say "Encode MP4"
-run ffmpeg -y -hide_banner -loglevel warning -i "$RAW_FILE" \
-    -vf "$GRADE_GRAPH" -an \
-    -c:v libx264 -preset slow -crf "$MP4_CRF" -pix_fmt yuv420p \
-    -movflags +faststart -r "$FPS" "$MP4_TMP"
+render_overlay_assets
+
+encode_mp4
 
 say "Encode GIF"
 run ffmpeg -y -hide_banner -loglevel warning -i "$MP4_TMP" \
