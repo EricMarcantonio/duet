@@ -5,25 +5,121 @@ use super::logic::{Anchor, ScreenRect, TRAY_OPEN, TRAY_QUIT, popover_position};
 /// Size (px) of the generated tray glyph. macOS draws it at 18pt, so 36px is @2x.
 pub const ICON_SIZE: u32 = 36;
 
-/// Monochrome headphones glyph as RGBA (black + alpha), suitable for a macOS
-/// template image. Rendered from a tiny signed-distance description with 4x4
-/// supersampling so edges are anti-aliased.
+// The Duet mark, in the same 24-unit design space as the app icon
+// (`scripts/make-icon.swift`): two headphones, the back one smaller and up to the
+// left, separated from the front one by a transparent gap so they never merge
+// into a blob at 18 pt. A menu bar image is a template, so both glyphs are black;
+// the icon's tint on the back glyph becomes that gap.
+
+/// Band centre: the pivot every glyph is scaled about.
+const BAND_CENTRE: (f64, f64) = (12.0, 13.0);
+const BAND_RADIUS: f64 = 8.4;
+const BAND_HALF: f64 = 1.15;
+/// How far below the band centre the ring descends before the cups take over.
+const BAND_DROP: f64 = 2.5;
+/// Ear cups: horizontal centre offset from the band centre, absolute centre y,
+/// half width/height, and corner radius.
+const CUP_X: f64 = 7.4;
+const CUP_Y: f64 = 17.2;
+const CUP_HALF: (f64, f64) = (2.5, 4.2);
+const CUP_RADIUS: f64 = 1.7;
+
+/// One headphone silhouette: a scale, a shift from the design centre, and how
+/// much bolder than the base drawing its band is.
+struct Glyph {
+    scale: f64,
+    offset: (f64, f64),
+    band_weight: f64,
+}
+
+/// Front headphone, nudged down-right to leave room for the back one.
+const FRONT: Glyph = Glyph {
+    scale: 0.74,
+    offset: (1.4, 1.2),
+    band_weight: 1.0,
+};
+/// Back headphone: the icon's ~0.73 size ratio, bolder so its band survives at
+/// 18 pt the way `make-icon.swift` bolds the small rendering.
+const BACK: Glyph = Glyph {
+    scale: 0.54,
+    offset: (-3.7, -3.7),
+    band_weight: 1.25,
+};
+/// Width of the transparent ring that separates the back glyph from the front
+/// one, in design units.
+const KNOCKOUT: f64 = 1.2;
+
+impl Glyph {
+    /// Map a design-space point into this glyph's own 24-unit coordinates.
+    fn local(&self, x: f64, y: f64) -> (f64, f64) {
+        let (cx, cy) = BAND_CENTRE;
+        (
+            cx + (x - cx - self.offset.0) / self.scale,
+            cy + (y - cy - self.offset.1) / self.scale,
+        )
+    }
+
+    /// The head band: a ring segment, `grow` units fatter on both sides. With
+    /// `filled` the ring's opening counts as covered too, which turns this into
+    /// the solid mask used for the knockout.
+    fn band(&self, lx: f64, ly: f64, grow: f64, filled: bool) -> bool {
+        let (cx, cy) = BAND_CENTRE;
+        let d = ((lx - cx).powi(2) + (ly - cy).powi(2)).sqrt();
+        let half = BAND_HALF * self.band_weight + grow;
+        let in_ring = d <= BAND_RADIUS + half && (filled || d >= BAND_RADIUS - half);
+        in_ring && ly <= cy + BAND_DROP + grow
+    }
+
+    /// This glyph's ink. `cups` picks which ear cups to draw: the back glyph
+    /// drops its right one, because it sits behind the front glyph and would
+    /// only show up as a speck inside the front band's opening.
+    fn ink(&self, x: f64, y: f64, cups: (bool, bool)) -> bool {
+        let (lx, ly) = self.local(x, y);
+        let (cx, _) = BAND_CENTRE;
+        self.band(lx, ly, 0.0, false)
+            || (cups.0 && cup(lx, ly, cx - CUP_X, 0.0))
+            || (cups.1 && cup(lx, ly, cx + CUP_X, 0.0))
+    }
+
+    /// Everything this glyph covers plus `grow` units of clear space around it.
+    fn mask(&self, x: f64, y: f64, grow: f64) -> bool {
+        let (lx, ly) = self.local(x, y);
+        let (cx, _) = BAND_CENTRE;
+        self.band(lx, ly, grow, true)
+            || cup(lx, ly, cx - CUP_X, grow)
+            || cup(lx, ly, cx + CUP_X, grow)
+    }
+}
+
+/// One ear cup: a rounded rectangle centred on `centre`, `grow` units fatter.
+fn cup(lx: f64, ly: f64, centre: f64, grow: f64) -> bool {
+    let (hx, hy) = (CUP_HALF.0 + grow, CUP_HALF.1 + grow);
+    let rr = CUP_RADIUS + grow;
+    let qx = ((lx - centre).abs() - (hx - rr)).max(0.0);
+    let qy = ((ly - CUP_Y).abs() - (hy - rr)).max(0.0);
+    (qx * qx + qy * qy).sqrt() <= rr
+}
+
+/// The Duet mark as RGBA (black + alpha), suitable for a macOS template image:
+/// two headphones, the back one knocked clear of the front one. Rendered from a
+/// tiny signed-distance description with 4x4 supersampling so edges are
+/// anti-aliased.
 pub fn headphones_rgba(size: u32) -> Vec<u8> {
     let s = size as f64 / 24.0; // design space is 24x24
+    // The knockout is specified in design units; the front glyph works in its own
+    // scaled coordinates, so grow its mask by the equivalent local amount.
+    let knockout = KNOCKOUT / FRONT.scale;
     let inside = |x: f64, y: f64| -> bool {
         let (x, y) = (x / s, y / s);
-        // Headband: upper arc of a ring.
-        let (cx, cy, r, half) = (12.0, 13.0, 8.4, 1.15);
-        let d = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
-        let band = (d - r).abs() <= half && y <= cy + 2.5;
-        // Ear cups: rounded rectangles.
-        let cup = |ccx: f64| {
-            let (hx, hy, rr) = (2.5, 4.2, 1.7);
-            let qx = ((x - ccx).abs() - (hx - rr)).max(0.0);
-            let qy = ((y - 17.2).abs() - (hy - rr)).max(0.0);
-            (qx * qx + qy * qy).sqrt() <= rr
-        };
-        band || cup(4.6) || cup(19.4)
+        if FRONT.ink(x, y, (true, true)) {
+            return true;
+        }
+        // A solid halo around the front glyph: it clears everything the back one
+        // would draw underneath, so the two shapes read as separate objects.
+        if FRONT.mask(x, y, knockout) {
+            return false;
+        }
+        BACK.ink(x, y, (true, false))
     };
     let mut out = Vec::with_capacity((size * size * 4) as usize);
     const SS: u32 = 4;
@@ -261,17 +357,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn glyph_has_ink_and_transparent_corners() {
+    fn glyph_is_two_headphones_with_a_gap_between_them() {
         let px = headphones_rgba(ICON_SIZE);
         assert_eq!(px.len(), (ICON_SIZE * ICON_SIZE * 4) as usize);
         let alpha = |x: u32, y: u32| px[((y * ICON_SIZE + x) * 4 + 3) as usize];
+        // Template image: black pixels only, transparent elsewhere.
+        assert!(px.chunks(4).all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0));
         assert_eq!(alpha(0, 0), 0);
-        assert_eq!(alpha(ICON_SIZE / 2, ICON_SIZE / 2), 0, "centre is empty");
-        assert_eq!(alpha(7, 26), 255, "left ear cup is solid");
-        assert_eq!(alpha(ICON_SIZE - 8, 26), 255, "right ear cup is solid");
-        assert!(
-            px.chunks(4).all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0),
-            "template = black only"
-        );
+        assert_eq!(alpha(ICON_SIZE - 1, ICON_SIZE - 1), 0);
+        // Ink coverage stays in a band that reads at 18 pt.
+        let ink = px.chunks(4).filter(|p| p[3] > 32).count();
+        let pct = ink * 100 / (ICON_SIZE * ICON_SIZE) as usize;
+        assert!((8..=45).contains(&pct), "ink coverage {pct}% out of band");
+        // Two clusters: ink in the upper-left back glyph and in the lower-right front glyph.
+        assert!(alpha(9, 8) > 0, "back glyph band missing");
+        assert!(alpha(26, 26) > 0, "front glyph ear cup missing");
+    }
+
+    #[test]
+    fn the_seam_between_the_glyphs_is_knocked_out() {
+        let px = headphones_rgba(ICON_SIZE);
+        let alpha = |x: u32, y: u32| px[((y * ICON_SIZE + x) * 4 + 3) as usize];
+        // The gap the icon has between the back and front silhouettes.
+        let gap = (12..=16).any(|x| (12..=16).any(|y| alpha(x, y) == 0));
+        assert!(gap, "back and front glyphs merged into one blob");
+    }
+
+    #[test]
+    fn the_back_glyph_reaches_past_the_front_one() {
+        // (9, 8) is inside the single full-size glyph's band opening as well, so it
+        // cannot tell the two drawings apart; the upper-left back glyph reaches
+        // where a lone centred glyph has nothing at all.
+        let px = headphones_rgba(ICON_SIZE);
+        let alpha = |x: u32, y: u32| px[((y * ICON_SIZE + x) * 4 + 3) as usize];
+        assert!(alpha(7, 8) > 0, "no second glyph outside the front one");
+        assert!(alpha(11, 20) > 0, "front glyph left ear cup missing");
     }
 }
