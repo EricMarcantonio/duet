@@ -16,6 +16,18 @@ builds), works fully offline, and is a single small Rust app.
 
 **Homepage:** <https://ericmarcantonio.github.io/duet/> (Rust + WebAssembly, in [`site/`](site/)).
 
+## Demo
+
+<p align="center">
+  <a href="docs/demo.mp4">
+    <img src="docs/demo.gif" alt="Duet's panel: picking two pairs of headphones, connecting one, and listening together with a separate volume for each pair" width="640">
+  </a>
+</p>
+
+One pair is ticked and connects, then both play through the single **Duet** output — with
+74 % on one pair and 60 % on the other. [Open the MP4](docs/demo.mp4) for the clean picture;
+the GIF is 640 px and tape-graded.
+
 ## Install
 
 ### Homebrew (cask)
