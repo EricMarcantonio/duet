@@ -370,24 +370,42 @@ mod tests {
         let pct = ink * 100 / (ICON_SIZE * ICON_SIZE) as usize;
         assert!((8..=45).contains(&pct), "ink coverage {pct}% out of band");
         // Two clusters: ink in the upper-left back glyph and in the lower-right front glyph.
-        assert!(alpha(9, 8) > 0, "back glyph band missing");
+        assert!(alpha(7, 8) > 0, "back glyph band missing");
         assert!(alpha(26, 26) > 0, "front glyph ear cup missing");
     }
 
+    /// The knockout is only visible as a *seam*: back-glyph ink, clear pixels,
+    /// then front-glyph ink, all on one row. A lone centred glyph also has
+    /// transparent pixels (its whole band opening) with ink beside them, so
+    /// "something in this box is clear" proves nothing; a row that walks
+    /// ink → clear → ink across the gap does, because the clear span can only
+    /// come from the halo grown around the front glyph.
     #[test]
     fn the_seam_between_the_glyphs_is_knocked_out() {
         let px = headphones_rgba(ICON_SIZE);
         let alpha = |x: u32, y: u32| px[((y * ICON_SIZE + x) * 4 + 3) as usize];
-        // The gap the icon has between the back and front silhouettes.
-        let gap = (12..=16).any(|x| (12..=16).any(|y| alpha(x, y) == 0));
-        assert!(gap, "back and front glyphs merged into one blob");
+        // The two rows where the silhouettes come closest, in @2x pixels:
+        //   y = 15 — the back glyph's left ear cup against the front band;
+        //   y = 20 — the same pair of ear cups, where they nearly touch.
+        // `seam` is the span the knockout has to clear between the two inks.
+        for (y, back, seam, front) in [(15, 8, 9..11, 11), (20, 7, 8..9, 9)] {
+            assert!(alpha(back, y) > 32, "no back-glyph ink at ({back}, {y})");
+            for x in seam {
+                assert_eq!(
+                    alpha(x, y),
+                    0,
+                    "({x}, {y}) has ink where the seam should be clear"
+                );
+            }
+            assert!(alpha(front, y) > 32, "no front-glyph ink at ({front}, {y})");
+        }
     }
 
     #[test]
     fn the_back_glyph_reaches_past_the_front_one() {
-        // (9, 8) is inside the single full-size glyph's band opening as well, so it
-        // cannot tell the two drawings apart; the upper-left back glyph reaches
-        // where a lone centred glyph has nothing at all.
+        // (9, 8) is on the old single full-size glyph's band too (alpha 239), so an
+        // ink-was-drawn-there check there cannot tell the two drawings apart; the
+        // discriminator is (7, 8), which a lone centred glyph leaves empty.
         let px = headphones_rgba(ICON_SIZE);
         let alpha = |x: u32, y: u32| px[((y * ICON_SIZE + x) * 4 + 3) as usize];
         assert!(alpha(7, 8) > 0, "no second glyph outside the front one");
