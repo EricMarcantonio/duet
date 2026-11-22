@@ -54,7 +54,8 @@ called `duet` (Duet Display, the iPad-as-a-second-screen tool), so a bare
 Duet's **Check for updates** notices when you installed through Homebrew and offers
 `brew upgrade --cask duet`. The cask itself lives in
 [`packaging/homebrew/duet.rb`](packaging/homebrew/duet.rb) and is mirrored to
-[`EricMarcantonio/homebrew-duet`](https://github.com/EricMarcantonio/homebrew-duet);
+[`EricMarcantonio/homebrew-duet`](https://github.com/EricMarcantonio/homebrew-duet),
+which repairs a stale digest on its own every six hours;
 [`packaging/homebrew/README.md`](packaging/homebrew/README.md) covers maintaining it.
 
 ### macOS 11+ (Apple Silicon & Intel)
@@ -200,7 +201,10 @@ The homepage is a separate Dioxus web (WebAssembly) crate in [`site/`](site/READ
 Releases: pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the macOS
 universal app, Windows and Linux, and attaches `Duet-macOS.zip`, `Duet-Windows.zip` and
 `Duet-Linux.tar.gz` to the GitHub release. Afterwards run `scripts/update-cask.sh vX.Y.Z` so
-the cask in `packaging/homebrew/` points at the new artifact's digest.
+the cask in `packaging/homebrew/` points at the new artifact's digest, and copy it into the
+tap. The tap also checks itself every six hours and repins the digest when a release asset
+has been replaced, so a forgotten copy or a rebuilt zip cannot leave `brew install` broken
+for longer than that.
 
 ## License
 

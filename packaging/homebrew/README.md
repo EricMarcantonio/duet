@@ -13,6 +13,12 @@ brew trust ericmarcantonio/duet
 brew install --cask EricMarcantonio/duet/duet
 ```
 
+The tap is the authoritative copy for installs, and it maintains itself: its
+`.github/workflows/cask-repair.yml` re-derives the digest from the released
+`Duet-macOS.zip` every six hours and repins `version` and `sha256` in one commit
+when they disagree. A rebuilt release asset can no longer leave installs
+broken, which is why the mirror here no longer has to be kept in sync by hand.
+
 ## Regenerating version and sha256
 
 The release sha256 is generated, never typed. Run this after a release's
@@ -24,9 +30,9 @@ scripts/update-cask.sh v0.3.0
 
 It downloads `Duet-macOS.zip` for that tag, sets `version` and `sha256` in
 `packaging/homebrew/duet.rb`, and runs `brew style --cask` on the result when
-Homebrew is installed. The file currently carries `version "0.3.0"` with an
-all-zero placeholder digest because that artifact has not been released yet; a
-real digest is committed only once the artifact exists.
+Homebrew is installed. Copy the result into the tap for a new release; the tap's
+repair workflow takes over from there and keeps the digest honest if the asset
+is ever replaced.
 
 ## Publishing the tap (already done)
 
